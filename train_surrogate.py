@@ -63,6 +63,8 @@ require_version(
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+print(MODEL_CONFIG_CLASSES)
+print(MODEL_TYPES)
 
 
 def pil_loader(path: str):
@@ -129,45 +131,14 @@ class DataTrainingArguments:
 
 
 @dataclass
-class ModelArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
-    """
+class OtherArguments:
+    use_auth_token: bool = field(
+        default=None,
+        metadata={
+            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token`."
+        },
+    )
 
-    model_name_or_path: str = field(
-        default="google/vit-base-patch16-224-in21k",
-        metadata={
-            "help": "Path to pretrained model or model identifier from huggingface.co/models"
-        },
-    )
-    model_type: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "If training from scratch, pass a model type from the list: "
-            + ", ".join(MODEL_TYPES)
-        },
-    )
-    config_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Pretrained config name or path if not the same as model_name"
-        },
-    )
-    cache_dir: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Where do you want to store the pretrained models downloaded from s3"
-        },
-    )
-    model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
-        },
-    )
-    image_processor_name: str = field(
-        default=None, metadata={"help": "Name or path of preprocessor config."}
-    )
     token: str = field(
         default=None,
         metadata={
@@ -177,13 +148,100 @@ class ModelArguments:
             )
         },
     )
-    use_auth_token: bool = field(
-        default=None,
+
+
+@dataclass
+class ClassifierArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
+    """
+
+    classifier_model_name_or_path: str = field(
+        default="google/vit-base-patch16-224-in21k",
         metadata={
-            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token`."
+            "help": "Path to pretrained model or model identifier from huggingface.co/models"
         },
     )
-    ignore_mismatched_sizes: bool = field(
+    classifier_model_type: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If training from scratch, pass a model type from the list: "
+            + ", ".join(MODEL_TYPES)
+        },
+    )
+
+    classifier_config_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Pretrained config name or path if not the same as model_name"
+        },
+    )
+    classifier_cache_dir: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Where do you want to store the pretrained models downloaded from s3"
+        },
+    )
+    classifier_model_revision: str = field(
+        default="main",
+        metadata={
+            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
+        },
+    )
+    classifier_image_processor_name: str = field(
+        default=None, metadata={"help": "Name or path of preprocessor config."}
+    )
+
+    classifier_ignore_mismatched_sizes: bool = field(
+        default=False,
+        metadata={
+            "help": "Will enable to load a pretrained model whose head dimensions are different."
+        },
+    )
+
+
+@dataclass
+class SurrogateArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
+    """
+
+    surrogate_model_name_or_path: str = field(
+        default="google/vit-base-patch16-224-in21k",
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models"
+        },
+    )
+    surrogate_model_type: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If training from scratch, pass a model type from the list: "
+            + ", ".join(MODEL_TYPES)
+        },
+    )
+
+    surrogate_config_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Pretrained config name or path if not the same as model_name"
+        },
+    )
+    surrogate_cache_dir: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Where do you want to store the pretrained models downloaded from s3"
+        },
+    )
+    surrogate_model_revision: str = field(
+        default="main",
+        metadata={
+            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
+        },
+    )
+    surrogate_image_processor_name: str = field(
+        default=None, metadata={"help": "Name or path of preprocessor config."}
+    )
+    surrogate_ignore_mismatched_sizes: bool = field(
         default=False,
         metadata={
             "help": "Will enable to load a pretrained model whose head dimensions are different."
@@ -203,33 +261,51 @@ def main():
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
     parser = HfArgumentParser(
-        (ModelArguments, DataTrainingArguments, TrainingArguments)
+        (
+            ClassifierArguments,
+            SurrogateArguments,
+            DataTrainingArguments,
+            TrainingArguments,
+            OtherArguments,
+        )
     )
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(
-            json_file=os.path.abspath(sys.argv[1])
-        )
+        (
+            classifier_args,
+            surrogate_args,
+            data_args,
+            training_args,
+            other_args,
+        ) = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        (
+            classifier_args,
+            surrogate_args,
+            data_args,
+            training_args,
+            other_args,
+        ) = parser.parse_args_into_dataclasses()
 
-    if model_args.use_auth_token is not None:
+    if other_args.use_auth_token is not None:
         warnings.warn(
             "The `use_auth_token` argument is deprecated and will be removed in v4.34.",
             FutureWarning,
         )
-        if model_args.token is not None:
+        if other_args.token is not None:
             raise ValueError(
                 "`token` and `use_auth_token` are both specified. Please set only the argument `token`."
             )
-        model_args.token = model_args.use_auth_token
+        other_args.token = other_args.use_auth_token
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
-    send_example_telemetry("run_image_classification", model_args, data_args)
+    send_example_telemetry("run_image_classification", surrogate_args, data_args)
 
+    ########################################################
     # Setup logging
+    #######################################################
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
@@ -253,39 +329,22 @@ def main():
     )
     logger.info(f"Training/evaluation parameters {training_args}")
 
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if (
-        os.path.isdir(training_args.output_dir)
-        and training_args.do_train
-        and not training_args.overwrite_output_dir
-    ):
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif (
-            last_checkpoint is not None and training_args.resume_from_checkpoint is None
-        ):
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
-
+    ########################################################
     # Set seed before initializing model.
+    #######################################################
     set_seed(training_args.seed)
 
+    ########################################################
     # Initialize our dataset and prepare it for the 'image-classification' task.
+    #######################################################
     if data_args.dataset_name is not None:
         if data_args.dataset_name == "frgfm/imagenette":
             dataset = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
-                cache_dir=model_args.cache_dir,
+                cache_dir=surrogate_args.surrogate_cache_dir,
                 task=None,
-                token=model_args.token,
+                token=other_args.token,
             )
 
             for split in dataset.keys():
@@ -296,9 +355,9 @@ def main():
             dataset = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
-                cache_dir=model_args.cache_dir,
+                cache_dir=surrogate_args.surrogate_cache_dir,
                 task="image-classification",
-                token=model_args.token,
+                token=other_args.token,
             )
     else:
         data_files = {}
@@ -309,7 +368,7 @@ def main():
         dataset = load_dataset(
             "imagefolder",
             data_files=data_files,
-            cache_dir=model_args.cache_dir,
+            cache_dir=surrogate_args.surrogate_cache_dir,
             task="image-classification",
         )
 
@@ -330,50 +389,82 @@ def main():
         label2id[label] = str(i)
         id2label[str(i)] = label
 
-    # Load the accuracy metric from the datasets package
-    metric = evaluate.load("accuracy")
-
-    # Define our compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
-    # predictions and label_ids field) and has to return a dictionary string to float.
-    def compute_metrics(p):
-        """Computes accuracy on a batch of predictions"""
-        return metric.compute(
-            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-        )
-
-    config = AutoConfig.from_pretrained(
-        model_args.config_name or model_args.model_name_or_path,
+    ########################################################
+    # Initialize classifier model
+    #######################################################
+    classifier_config = AutoConfig.from_pretrained(
+        classifier_args.classifier_config_name
+        or classifier_args.classifier_model_name_or_path,
         num_labels=len(labels),
         label2id=label2id,
         id2label=id2label,
         finetuning_task="image-classification",
-        cache_dir=model_args.cache_dir,
-        revision=model_args.model_revision,
-        token=model_args.token,
+        cache_dir=classifier_args.classifier_cache_dir,
+        revision=classifier_args.classifier_model_revision,
+        token=other_args.token,
     )
-    model = AutoModelForImageClassification.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-        revision=model_args.model_revision,
-        token=model_args.token,
-        ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
+    classifier = AutoModelForImageClassification.from_pretrained(
+        classifier_args.classifier_model_name_or_path,
+        from_tf=bool(".ckpt" in classifier_args.classifier_model_name_or_path),
+        config=classifier_config,
+        cache_dir=classifier_args.classifier_cache_dir,
+        revision=classifier_args.classifier_model_revision,
+        token=other_args.token,
+        ignore_mismatched_sizes=classifier_args.classifier_ignore_mismatched_sizes,
     )
-    image_processor = AutoImageProcessor.from_pretrained(
-        model_args.image_processor_name or model_args.model_name_or_path,
-        cache_dir=model_args.cache_dir,
-        revision=model_args.model_revision,
-        token=model_args.token,
+    classifier_image_processor = AutoImageProcessor.from_pretrained(
+        classifier_args.classifier_image_processor_name
+        or classifier_args.classifier_model_name_or_path,
+        cache_dir=classifier_args.classifier_cache_dir,
+        revision=classifier_args.classifier_model_revision,
+        token=other_args.token,
     )
 
+    ########################################################
+    # Initialize surrogate model
+    #######################################################
+    surrogate_config = AutoConfig.from_pretrained(
+        surrogate_args.surrogate_config_name
+        or surrogate_args.surrogate_model_name_or_path,
+        num_labels=len(labels),
+        label2id=label2id,
+        id2label=id2label,
+        finetuning_task="image-classification",
+        cache_dir=surrogate_args.surrogate_cache_dir,
+        revision=surrogate_args.surrogate_model_revision,
+        token=other_args.token,
+    )
+    surrogate = AutoModelForImageClassification.from_pretrained(
+        surrogate_args.surrogate_model_name_or_path,
+        from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
+        config=surrogate_config,
+        cache_dir=surrogate_args.surrogate_cache_dir,
+        revision=surrogate_args.surrogate_model_revision,
+        token=other_args.token,
+        ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
+    )
+    surrogate_image_processor = AutoImageProcessor.from_pretrained(
+        surrogate_args.surrogate_image_processor_name
+        or surrogate_args.surrogate_model_name_or_path,
+        cache_dir=surrogate_args.surrogate_cache_dir,
+        revision=surrogate_args.surrogate_model_revision,
+        token=other_args.token,
+    )
+
+    ########################################################
+    # Align dataset to model settings
+    #######################################################
     # Define torchvision transforms to be applied to each image.
-    if "shortest_edge" in image_processor.size:
-        size = image_processor.size["shortest_edge"]
+    if "shortest_edge" in surrogate_image_processor.size:
+        size = surrogate_image_processor.size["shortest_edge"]
     else:
-        size = (image_processor.size["height"], image_processor.size["width"])
+        size = (
+            surrogate_image_processor.size["height"],
+            surrogate_image_processor.size["width"],
+        )
     normalize = Normalize(
-        mean=image_processor.image_mean, std=image_processor.image_std
+        mean=surrogate_image_processor.image_mean,
+        std=surrogate_image_processor.image_std,
     )
     _train_transforms = Compose(
         [
@@ -432,18 +523,56 @@ def main():
         # Set the validation transforms
         dataset["validation"].set_transform(val_transforms)
 
+    ########################################################
     # Initalize our trainer
+    #######################################################
+    # Load the accuracy metric from the datasets package
+    metric = evaluate.load("accuracy")
+
+    # Define our compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
+    # predictions and label_ids field) and has to return a dictionary string to float.
+    def compute_metrics(p):
+        """Computes accuracy on a batch of predictions"""
+        return metric.compute(
+            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+        )
+
     trainer = Trainer(
-        model=model,
+        model=surrogate,
         args=training_args,
         train_dataset=dataset["train"] if training_args.do_train else None,
         eval_dataset=dataset["validation"] if training_args.do_eval else None,
         compute_metrics=compute_metrics,
-        tokenizer=image_processor,
+        tokenizer=surrogate_image_processor,
         data_collator=collate_fn,
     )
 
+    ########################################################
+    # Detecting last checkpoint
+    #######################################################
+    last_checkpoint = None
+    if (
+        os.path.isdir(training_args.output_dir)
+        and training_args.do_train
+        and not training_args.overwrite_output_dir
+    ):
+        last_checkpoint = get_last_checkpoint(training_args.output_dir)
+        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
+            raise ValueError(
+                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
+                "Use --overwrite_output_dir to overcome."
+            )
+        elif (
+            last_checkpoint is not None and training_args.resume_from_checkpoint is None
+        ):
+            logger.info(
+                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
+                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
+            )
+
+    ########################################################
     # Training
+    #######################################################
     if training_args.do_train:
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
@@ -456,15 +585,19 @@ def main():
         trainer.save_metrics("train", train_result.metrics)
         trainer.save_state()
 
+    ########################################################
     # Evaluation
+    #######################################################
     if training_args.do_eval:
         metrics = trainer.evaluate()
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
+    ########################################################
     # Write model card and (optionally) push to hub
+    #######################################################
     kwargs = {
-        "finetuned_from": model_args.model_name_or_path,
+        "finetuned_from": surrogate_args.surrogate_model_name_or_path,
         "tasks": "image-classification",
         "dataset": data_args.dataset_name,
         "tags": ["image-classification", "vision"],
