@@ -147,56 +147,6 @@ class OtherArguments:
 
 
 @dataclass
-class ClassifierArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
-    """
-
-    classifier_model_name_or_path: str = field(
-        default="google/vit-base-patch16-224-in21k",
-        metadata={
-            "help": "Path to pretrained model or model identifier from huggingface.co/models"
-        },
-    )
-    classifier_model_type: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "If training from scratch, pass a model type from the list: "
-            + ", ".join(MODEL_TYPES)
-        },
-    )
-
-    classifier_config_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Pretrained config name or path if not the same as model_name"
-        },
-    )
-    classifier_cache_dir: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Where do you want to store the pretrained models downloaded from s3"
-        },
-    )
-    classifier_model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
-        },
-    )
-    classifier_image_processor_name: str = field(
-        default=None, metadata={"help": "Name or path of preprocessor config."}
-    )
-
-    classifier_ignore_mismatched_sizes: bool = field(
-        default=False,
-        metadata={
-            "help": "Will enable to load a pretrained model whose head dimensions are different."
-        },
-    )
-
-
-@dataclass
 class SurrogateArguments:
     """
     Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
@@ -245,6 +195,55 @@ class SurrogateArguments:
     )
 
 
+@dataclass
+class ExplainerArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
+    """
+
+    explainer_model_name_or_path: str = field(
+        default="google/vit-base-patch16-224-in21k",
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models"
+        },
+    )
+    explainer_model_type: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If training from scratch, pass a model type from the list: "
+            + ", ".join(MODEL_TYPES)
+        },
+    )
+
+    explainer_config_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Pretrained config name or path if not the same as model_name"
+        },
+    )
+    explainer_cache_dir: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Where do you want to store the pretrained models downloaded from s3"
+        },
+    )
+    explainer_model_revision: str = field(
+        default="main",
+        metadata={
+            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
+        },
+    )
+    explainer_image_processor_name: str = field(
+        default=None, metadata={"help": "Name or path of preprocessor config."}
+    )
+    explainer_ignore_mismatched_sizes: bool = field(
+        default=False,
+        metadata={
+            "help": "Will enable to load a pretrained model whose head dimensions are different."
+        },
+    )
+
+
 def main():
     ########################################################
     # Parse arguments
@@ -255,8 +254,8 @@ def main():
 
     parser = HfArgumentParser(
         (
-            ClassifierArguments,
             SurrogateArguments,
+            ExplainerArguments,
             DataTrainingArguments,
             TrainingArguments,
             OtherArguments,
@@ -266,16 +265,16 @@ def main():
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
         (
-            classifier_args,
             surrogate_args,
+            explainer_args,
             data_args,
             training_args,
             other_args,
         ) = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         (
-            classifier_args,
             surrogate_args,
+            explainer_args,
             data_args,
             training_args,
             other_args,
@@ -383,37 +382,6 @@ def main():
         id2label[str(i)] = label
 
     ########################################################
-    # Initialize classifier model
-    ########################################################
-    classifier_config = AutoConfig.from_pretrained(
-        classifier_args.classifier_config_name
-        or classifier_args.classifier_model_name_or_path,
-        num_labels=len(labels),
-        label2id=label2id,
-        id2label=id2label,
-        finetuning_task="image-classification",
-        cache_dir=classifier_args.classifier_cache_dir,
-        revision=classifier_args.classifier_model_revision,
-        token=other_args.token,
-    )
-    classifier = AutoModelForImageClassification.from_pretrained(
-        classifier_args.classifier_model_name_or_path,
-        from_tf=bool(".ckpt" in classifier_args.classifier_model_name_or_path),
-        config=classifier_config,
-        cache_dir=classifier_args.classifier_cache_dir,
-        revision=classifier_args.classifier_model_revision,
-        token=other_args.token,
-        ignore_mismatched_sizes=classifier_args.classifier_ignore_mismatched_sizes,
-    )
-    classifier_image_processor = AutoImageProcessor.from_pretrained(
-        classifier_args.classifier_image_processor_name
-        or classifier_args.classifier_model_name_or_path,
-        cache_dir=classifier_args.classifier_cache_dir,
-        revision=classifier_args.classifier_model_revision,
-        token=other_args.token,
-    )
-
-    ########################################################
     # Initialize surrogate model
     ########################################################
     surrogate_config = AutoConfig.from_pretrained(
@@ -445,6 +413,38 @@ def main():
     )
 
     ########################################################
+    # Initialize classifier model
+    ########################################################
+
+    explainer_config = AutoConfig.from_pretrained(
+        explainer_args.explainer_config_name
+        or explainer_args.explainer_model_name_or_path,
+        num_labels=len(labels),
+        label2id=label2id,
+        id2label=id2label,
+        finetuning_task="image-classification",
+        cache_dir=explainer_args.explainer_cache_dir,
+        revision=explainer_args.explainer_model_revision,
+        token=other_args.token,
+    )
+    explainer = AutoModelForImageClassification.from_pretrained(
+        explainer_args.explainer_model_name_or_path,
+        from_tf=bool(".ckpt" in explainer_args.explainer_model_name_or_path),
+        config=explainer_config,
+        cache_dir=explainer_args.explainer_cache_dir,
+        revision=explainer_args.explainer_model_revision,
+        token=other_args.token,
+        ignore_mismatched_sizes=explainer_args.explainer_ignore_mismatched_sizes,
+    )
+    explainer_image_processor = AutoImageProcessor.from_pretrained(
+        explainer_args.explainer_image_processor_name
+        or explainer_args.explainer_model_name_or_path,
+        cache_dir=explainer_args.explainer_cache_dir,
+        revision=explainer_args.explainer_model_revision,
+        token=other_args.token,
+    )
+
+    ########################################################
     # Align dataset to model settings
     ########################################################
 
@@ -471,60 +471,22 @@ def main():
     ########################################################
     # Align dataset to model settings
     ########################################################
-    # Set the training transforms
-    if training_args.do_train:
-        dataset["train_classifier"] = dataset["train"]
-        dataset["train_classifier"].set_transform(
-            get_image_transform(classifier_image_processor)["train_transform"]
-        )
+    dataset["train_surrogate"] = dataset["train"]
+    dataset["validation_surrogate"] = dataset["validation"]
+    # # Set the training transforms
+    # if training_args.do_train:
+    # dataset["train_surrogate"] = dataset["train"]
+    #     dataset["train_surrogate"].set_transform(
+    #         get_image_transform(surrogate_image_processor)["train_transform"]
+    #     )
 
-    # Set the validation transforms
-    if training_args.do_eval:
-        dataset["validation_classifier"] = dataset["validation"]
-        dataset["validation_classifier"].set_transform(
-            get_image_transform(classifier_image_processor)["eval_transform"]
-        )
+    # if training_args.do_eval:
+    #     # Set the validation transforms
+    #     dataset["validation_surrogate"] = dataset["validation"]
+    #     dataset["validation_surrogate"].set_transform(
+    #         get_image_transform(surrogate_image_processor)["eval_transform"]
+    #     )
 
-    ########################################################
-    # Evaluate the original model
-    ########################################################
-
-    def collate_fn(examples):
-        pixel_values = torch.stack([example["pixel_values"] for example in examples])
-        labels = torch.tensor([example["labels"] for example in examples])
-        return {"pixel_values": pixel_values, "labels": labels}
-
-    classifier_trainer = Trainer(
-        model=classifier,
-        args=training_args,
-        train_dataset=None,
-        eval_dataset=None,
-        compute_metrics=None,
-        tokenizer=classifier_image_processor,
-        data_collator=collate_fn,
-    )
-
-    train_dataset_predict = classifier_trainer.predict(dataset["train"])
-
-    dataset["train_surrogate"] = dataset["train"].add_column(
-        "classifier_logits", iter(train_dataset_predict.predictions)
-    )
-    assert all(
-        train_dataset_predict.label_ids
-        == dataset["train_surrogate"].with_transform(lambda x: x)["labels"]
-    )
-    validation_dataset_predict = classifier_trainer.predict(dataset["validation"])
-    dataset["validation_surrogate"] = dataset["validation"].add_column(
-        "classifier_logits", iter(validation_dataset_predict.predictions)
-    )
-    assert all(
-        validation_dataset_predict.label_ids
-        == dataset["validation_surrogate"].with_transform(lambda x: x)["labels"]
-    )
-
-    ########################################################
-    # Add random generator
-    ########################################################
     dataset["validation_surrogate"] = dataset["validation_surrogate"].add_column(
         "mask_random_seed",
         iter(
@@ -576,8 +538,114 @@ def main():
         )
     )
 
+    def collate_fn(examples):
+        pixel_values = torch.stack([example["pixel_values"] for example in examples])
+        labels = torch.tensor([example["labels"] for example in examples])
+        masks = torch.tensor(np.array([example["masks"] for example in examples]))
+        return {"pixel_values": pixel_values, "labels": labels, "masks": masks}
+
+    surrogate_trainer = Trainer(
+        model=surrogate,
+        args=training_args,
+        train_dataset=None,
+        eval_dataset=None,
+        compute_metrics=None,
+        tokenizer=surrogate_image_processor,
+        data_collator=collate_fn,
+    )
+
+    ipdb.set_trace()
+    train_dataset_predict = surrogate_trainer.predict(dataset["train"])
+
+    dataset["train_explainer"] = dataset["train"].add_column(
+        "classifier_logits", iter(train_dataset_predict.predictions)
+    )
+    assert all(
+        train_dataset_predict.label_ids
+        == dataset["train_explainer"].with_transform(lambda x: x)["labels"]
+    )
+
     ########################################################
-    # Initalize the surrogate trainer
+    # Evaluate the original model
+    ########################################################
+
+    dataset["train_explainer"].set_transform(
+        lambda x: tranform_mask(
+            get_image_transform(explainer_image_processor)["train_transform"](x)
+        )
+    )
+
+    dataset["validation_explainer"].set_transform(
+        lambda x: tranform_mask(
+            get_image_transform(explainer_image_processor)["eval_transform"](x)
+        )
+    )
+
+    validation_dataset_predict = surrogate_trainer.predict(dataset["validation"])
+    dataset["validation_explainer"] = dataset["validation"].add_column(
+        "classifier_logits", iter(validation_dataset_predict.predictions)
+    )
+    assert all(
+        validation_dataset_predict.label_ids
+        == dataset["validation_explainer"].with_transform(lambda x: x)["labels"]
+    )
+
+    ########################################################
+    # Add random generator
+    ########################################################
+    dataset["validation_explainer"] = dataset["validation_explainer"].add_column(
+        "mask_random_seed",
+        iter(
+            np.random.RandomState(training_args.seed).randint(
+                0,
+                len(dataset["validation_explainer"]),
+                size=len(dataset["validation_explainer"]),
+            )
+        ),
+    )
+
+    def tranform_mask(example_batch):
+        """Add mask to example_batch"""
+        if "mask_random_seed" in example_batch:
+            example_batch["masks"] = [
+                generate_mask(
+                    num_features=14 * 14,
+                    num_mask_samples=1,
+                    paired_mask_samples=False,
+                    mode="uniform",
+                    random_state=np.random.RandomState(
+                        example_batch["mask_random_seed"][idx]
+                    ),
+                ).squeeze(0)
+                for idx in range(len(example_batch["labels"]))
+            ]
+        else:
+            example_batch["masks"] = [
+                generate_mask(
+                    num_features=14 * 14,
+                    num_mask_samples=1,
+                    paired_mask_samples=False,
+                    mode="uniform",
+                    random_state=None,
+                ).squeeze(0)
+                for idx in range(len(example_batch["labels"]))
+            ]
+        return example_batch
+
+    dataset["train_explainer"].set_transform(
+        lambda x: tranform_mask(
+            get_image_transform(explainer_image_processor)["train_transform"](x)
+        )
+    )
+
+    dataset["validation_explainer"].set_transform(
+        lambda x: tranform_mask(
+            get_image_transform(explainer_image_processor)["eval_transform"](x)
+        )
+    )
+
+    ########################################################
+    # Initalize the explainer trainer
     ########################################################
     # Load the accuracy metric from the datasets package
     metric = evaluate.load("accuracy")
@@ -605,13 +673,13 @@ def main():
             "classifier_logits": classifier_logits,
         }
 
-    surrogate_trainer = Trainer(
-        model=surrogate,
+    explainer_trainer = Trainer(
+        model=explainer,
         args=training_args,
-        train_dataset=dataset["train_surrogate"] if training_args.do_train else None,
-        eval_dataset=dataset["validation_surrogate"] if training_args.do_eval else None,
+        train_dataset=dataset["train_explainer"] if training_args.do_train else None,
+        eval_dataset=dataset["validation_explainer"] if training_args.do_eval else None,
         compute_metrics=compute_metrics,
-        tokenizer=surrogate_image_processor,
+        tokenizer=explainer_image_processor,
         data_collator=collate_fn,
     )
 
@@ -647,33 +715,33 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-        train_result = surrogate_trainer.train(resume_from_checkpoint=checkpoint)
-        surrogate_trainer.save_model()
-        surrogate_trainer.log_metrics("train", train_result.metrics)
-        surrogate_trainer.save_metrics("train", train_result.metrics)
-        surrogate_trainer.save_state()
+        train_result = explainer_trainer.train(resume_from_checkpoint=checkpoint)
+        explainer_trainer.save_model()
+        explainer_trainer.log_metrics("train", train_result.metrics)
+        explainer_trainer.save_metrics("train", train_result.metrics)
+        explainer_trainer.save_state()
 
     ########################################################
     # Evaluation
     #######################################################
     if training_args.do_eval:
-        metrics = surrogate_trainer.evaluate()
-        surrogate_trainer.log_metrics("eval", metrics)
-        surrogate_trainer.save_metrics("eval", metrics)
+        metrics = explainer_trainer.evaluate()
+        explainer_trainer.log_metrics("eval", metrics)
+        explainer_trainer.save_metrics("eval", metrics)
 
     ########################################################
     # Write model card and (optionally) push to hub
     #######################################################
     kwargs = {
-        "finetuned_from": surrogate_args.surrogate_model_name_or_path,
+        "finetuned_from": explainer_args.explainer_model_name_or_path,
         "tasks": "image-classification",
         "dataset": data_args.dataset_name,
         "tags": ["image-classification", "vision"],
     }
     if training_args.push_to_hub:
-        surrogate_trainer.push_to_hub(**kwargs)
+        explainer_trainer.push_to_hub(**kwargs)
     else:
-        surrogate_trainer.create_model_card(**kwargs)
+        explainer_trainer.create_model_card(**kwargs)
 
 
 if __name__ == "__main__":

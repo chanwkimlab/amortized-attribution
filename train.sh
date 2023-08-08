@@ -70,7 +70,37 @@ python train_surrogate.py \
     --save_total_limit 3 \
     --seed 42 \
     --output_dir ./logs/vitbase_imagenette_surrogate \
-    --report_to wandb    
+    --report_to wandb 
+
+
+# train explainer 
+CUDA_VISIBLE_DEVICES=2 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_explainer \
+python train_explainer.py \
+    --surrogate_model_name_or_path ./logs/vitbase_imagenette_surrogate \
+    --surrogate_ignore_mismatched_sizes True \
+    --explainer_model_name_or_path ./logs/vitbase_imagenette_surrogate \
+    --explainer_ignore_mismatched_sizes True \
+    --dataset_name frgfm/imagenette \
+    --dataset_config_name 160px \
+    --remove_unused_columns False \
+    --do_train \
+    --do_eval \
+    --fp16 True \
+    --learning_rate 2e-5 \
+    --num_train_epochs 25 \
+    --per_device_train_batch_size 128 \
+    --per_device_eval_batch_size 128 \
+    --logging_strategy steps \
+    --logging_steps 10 \
+    --evaluation_strategy epoch \
+    --save_strategy epoch \
+    --load_best_model_at_end True \
+    --save_total_limit 3 \
+    --seed 42 \
+    --output_dir ./logs/vitbase_imagenette_explainer \
+    --report_to wandb        
 
 # resnet50 on imagenette
 CUDA_VISIBLE_DEVICES=2 python train_classifier.py \
