@@ -191,12 +191,6 @@ class ModelArguments:
     )
 
 
-def collate_fn(examples):
-    pixel_values = torch.stack([example["pixel_values"] for example in examples])
-    labels = torch.tensor([example["labels"] for example in examples])
-    return {"pixel_values": pixel_values, "labels": labels}
-
-
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -431,6 +425,11 @@ def main():
             )
         # Set the validation transforms
         dataset["validation"].set_transform(val_transforms)
+
+    def collate_fn(examples):
+        pixel_values = torch.stack([example["pixel_values"] for example in examples])
+        labels = torch.tensor([example["labels"] for example in examples])
+        return {"pixel_values": pixel_values, "labels": labels}
 
     # Initalize our trainer
     trainer = Trainer(

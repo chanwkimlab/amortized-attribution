@@ -12,7 +12,6 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-
 import logging
 import os
 import sys
@@ -21,20 +20,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import evaluate
+import ipdb
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
 from PIL import Image
-from torchvision.transforms import (
-    CenterCrop,
-    Compose,
-    Normalize,
-    RandomHorizontalFlip,
-    RandomResizedCrop,
-    Resize,
-    ToTensor,
-)
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
+from torch.nn import functional as F
 from transformers import (
     MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
     AutoConfig,
@@ -48,6 +41,9 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
+
+from models import AutoModelForImageClassificationSurrogate
+from utils import generate_mask, get_image_transform
 
 """ Fine-tuning a 🤗 Transformers model for image classification"""
 
@@ -249,13 +245,10 @@ class SurrogateArguments:
     )
 
 
-def collate_fn(examples):
-    pixel_values = torch.stack([example["pixel_values"] for example in examples])
-    labels = torch.tensor([example["labels"] for example in examples])
-    return {"pixel_values": pixel_values, "labels": labels}
-
-
 def main():
+    ########################################################
+    # Parse arguments
+    #######################################################
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -331,12 +324,12 @@ def main():
 
     ########################################################
     # Set seed before initializing model.
-    #######################################################
+    ########################################################
     set_seed(training_args.seed)
 
     ########################################################
     # Initialize our dataset and prepare it for the 'image-classification' task.
-    #######################################################
+    ########################################################
     if data_args.dataset_name is not None:
         if data_args.dataset_name == "frgfm/imagenette":
             dataset = load_dataset(
@@ -391,7 +384,7 @@ def main():
 
     ########################################################
     # Initialize classifier model
-    #######################################################
+    ########################################################
     classifier_config = AutoConfig.from_pretrained(
         classifier_args.classifier_config_name
         or classifier_args.classifier_model_name_or_path,
@@ -422,7 +415,7 @@ def main():
 
     ########################################################
     # Initialize surrogate model
-    #######################################################
+    ########################################################
     surrogate_config = AutoConfig.from_pretrained(
         surrogate_args.surrogate_config_name
         or surrogate_args.surrogate_model_name_or_path,
@@ -434,7 +427,7 @@ def main():
         revision=surrogate_args.surrogate_model_revision,
         token=other_args.token,
     )
-    surrogate = AutoModelForImageClassification.from_pretrained(
+    surrogate = AutoModelForImageClassificationSurrogate.from_pretrained(
         surrogate_args.surrogate_model_name_or_path,
         from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
         config=surrogate_config,
@@ -453,51 +446,7 @@ def main():
 
     ########################################################
     # Align dataset to model settings
-    #######################################################
-    # Define torchvision transforms to be applied to each image.
-    if "shortest_edge" in surrogate_image_processor.size:
-        size = surrogate_image_processor.size["shortest_edge"]
-    else:
-        size = (
-            surrogate_image_processor.size["height"],
-            surrogate_image_processor.size["width"],
-        )
-    normalize = Normalize(
-        mean=surrogate_image_processor.image_mean,
-        std=surrogate_image_processor.image_std,
-    )
-    _train_transforms = Compose(
-        [
-            RandomResizedCrop(size),
-            RandomHorizontalFlip(),
-            ToTensor(),
-            normalize,
-        ]
-    )
-    _val_transforms = Compose(
-        [
-            Resize(size),
-            CenterCrop(size),
-            ToTensor(),
-            normalize,
-        ]
-    )
-
-    def train_transforms(example_batch):
-        """Apply _train_transforms across a batch."""
-        example_batch["pixel_values"] = [
-            _train_transforms(pil_img.convert("RGB"))
-            for pil_img in example_batch["image"]
-        ]
-        return example_batch
-
-    def val_transforms(example_batch):
-        """Apply _val_transforms across a batch."""
-        example_batch["pixel_values"] = [
-            _val_transforms(pil_img.convert("RGB"))
-            for pil_img in example_batch["image"]
-        ]
-        return example_batch
+    ########################################################
 
     if training_args.do_train:
         if "train" not in dataset:
@@ -509,7 +458,10 @@ def main():
                 .select(range(data_args.max_train_samples))
             )
         # Set the training transforms
-        dataset["train"].set_transform(train_transforms)
+        dataset["train_classifier"] = dataset["train"]
+        dataset["train_classifier"].set_transform(
+            get_image_transform(surrogate_image_processor)["train_transform"]
+        )
 
     if training_args.do_eval:
         if "validation" not in dataset:
@@ -521,11 +473,106 @@ def main():
                 .select(range(data_args.max_eval_samples))
             )
         # Set the validation transforms
-        dataset["validation"].set_transform(val_transforms)
+        dataset["validation_classifier"] = dataset["validation"]
+        dataset["validation_classifier"].set_transform(
+            get_image_transform(surrogate_image_processor)["eval_transform"]
+        )
 
     ########################################################
-    # Initalize our trainer
-    #######################################################
+    # Evaluate the original model
+    ########################################################
+
+    def collate_fn(examples):
+        pixel_values = torch.stack([example["pixel_values"] for example in examples])
+        labels = torch.tensor([example["labels"] for example in examples])
+        labels = torch.tensor([example["labels"] for example in examples])
+        return {"pixel_values": pixel_values, "labels": labels}
+
+    classifier_trainer = Trainer(
+        model=classifier,
+        args=training_args,
+        train_dataset=None,
+        eval_dataset=None,
+        compute_metrics=None,
+        tokenizer=classifier_image_processor,
+        data_collator=collate_fn,
+    )
+
+    train_dataset_predict = classifier_trainer.predict(dataset["train"])
+
+    dataset["train_surrogate"] = dataset["train"].add_column(
+        "classifier_logits", iter(train_dataset_predict.predictions)
+    )
+    assert all(
+        train_dataset_predict.label_ids
+        == dataset["train_surrogate"].with_transform(lambda x: x)["labels"]
+    )
+    validation_dataset_predict = classifier_trainer.predict(dataset["validation"])
+    dataset["validation_surrogate"] = dataset["validation"].add_column(
+        "classifier_logits", iter(validation_dataset_predict.predictions)
+    )
+    assert all(
+        validation_dataset_predict.label_ids
+        == dataset["validation_surrogate"].with_transform(lambda x: x)["labels"]
+    )
+
+    ########################################################
+    # Add random generator
+    ########################################################
+    dataset["validation_surrogate"] = dataset["validation_surrogate"].add_column(
+        "mask_random_seed",
+        iter(
+            np.random.RandomState(training_args.seed).randint(
+                0,
+                len(dataset["validation_surrogate"]),
+                size=len(dataset["validation_surrogate"]),
+            )
+        ),
+    )
+
+    def tranform_mask(example_batch):
+        """Add mask to example_batch"""
+        if "mask_random_seed" in example_batch:
+            example_batch["masks"] = [
+                generate_mask(
+                    num_features=14 * 14,
+                    num_mask_samples=1,
+                    paired_mask_samples=False,
+                    mode="uniform",
+                    random_state=np.random.RandomState(
+                        example_batch["mask_random_seed"][idx]
+                    ),
+                ).squeeze(0)
+                for idx in range(len(example_batch["labels"]))
+            ]
+        else:
+            example_batch["masks"] = [
+                generate_mask(
+                    num_features=14 * 14,
+                    num_mask_samples=1,
+                    paired_mask_samples=False,
+                    mode="uniform",
+                    random_state=None,
+                ).squeeze(0)
+                for idx in range(len(example_batch["labels"]))
+            ]
+        return example_batch
+
+    dataset["train_surrogate"].set_transform(
+        lambda x: tranform_mask(
+            get_image_transform(classifier_image_processor)["train_transform"](x)
+        )
+    )
+
+    dataset["validation_surrogate"].set_transform(
+        lambda x: tranform_mask(
+            get_image_transform(classifier_image_processor)["eval_transform"](x)
+        )
+    )
+
+    ########################################################
+    # Initalize the surrogate trainer
+    ########################################################
     # Load the accuracy metric from the datasets package
     metric = evaluate.load("accuracy")
 
@@ -537,11 +584,26 @@ def main():
             predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
         )
 
-    trainer = Trainer(
+    def collate_fn(examples):
+        pixel_values = torch.stack([example["pixel_values"] for example in examples])
+        labels = torch.tensor([example["labels"] for example in examples])
+        masks = torch.tensor(np.array([example["masks"] for example in examples]))
+        classifier_logits = torch.tensor(
+            np.array([example["classifier_logits"] for example in examples])
+        )
+
+        return {
+            "pixel_values": pixel_values,
+            "labels": labels,
+            "masks": masks,
+            "classifier_logits": classifier_logits,
+        }
+
+    surrogate_trainer = Trainer(
         model=surrogate,
         args=training_args,
-        train_dataset=dataset["train"] if training_args.do_train else None,
-        eval_dataset=dataset["validation"] if training_args.do_eval else None,
+        train_dataset=dataset["train_surrogate"] if training_args.do_train else None,
+        eval_dataset=dataset["validation_surrogate"] if training_args.do_eval else None,
         compute_metrics=compute_metrics,
         tokenizer=surrogate_image_processor,
         data_collator=collate_fn,
@@ -579,19 +641,19 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-        train_result = trainer.train(resume_from_checkpoint=checkpoint)
-        trainer.save_model()
-        trainer.log_metrics("train", train_result.metrics)
-        trainer.save_metrics("train", train_result.metrics)
-        trainer.save_state()
+        train_result = surrogate_trainer.train(resume_from_checkpoint=checkpoint)
+        surrogate_trainer.save_model()
+        surrogate_trainer.log_metrics("train", train_result.metrics)
+        surrogate_trainer.save_metrics("train", train_result.metrics)
+        surrogate_trainer.save_state()
 
     ########################################################
     # Evaluation
     #######################################################
     if training_args.do_eval:
-        metrics = trainer.evaluate()
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
+        metrics = surrogate_trainer.evaluate()
+        surrogate_trainer.log_metrics("eval", metrics)
+        surrogate_trainer.save_metrics("eval", metrics)
 
     ########################################################
     # Write model card and (optionally) push to hub
@@ -603,9 +665,9 @@ def main():
         "tags": ["image-classification", "vision"],
     }
     if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
+        surrogate_trainer.push_to_hub(**kwargs)
     else:
-        trainer.create_model_card(**kwargs)
+        surrogate_trainer.create_model_card(**kwargs)
 
 
 if __name__ == "__main__":
