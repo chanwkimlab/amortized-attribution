@@ -432,17 +432,26 @@ def main():
         token=other_args.token,
     )
     surrogate_for_image_classification_config = SurrogateForImageClassificationConfig(
-        pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
-        config=surrogate_config,
+        classifier_pretrained_model_name_or_path=classifier_args.classifier_model_name_or_path,
+        classifier_config=classifier_config,
+        classifier_from_tf=bool(
+            ".ckpt" in classifier_args.classifier_model_name_or_path
+        ),
+        classifier_cache_dir=classifier_args.classifier_cache_dir,
+        classifier_revision=classifier_args.classifier_model_revision,
+        classifier_token=other_args.token,
+        classifier_ignore_mismatched_sizes=classifier_args.classifier_ignore_mismatched_sizes,
+        surrogate_pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
+        surrogate_config=surrogate_config,
+        surrogate_from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
+        surrogate_cache_dir=surrogate_args.surrogate_cache_dir,
+        surrogate_revision=surrogate_args.surrogate_model_revision,
+        surrogate_token=other_args.token,
+        surrogate_ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
     )
 
     surrogate = SurrogateForImageClassification(
         config=surrogate_for_image_classification_config,
-        from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
-        cache_dir=surrogate_args.surrogate_cache_dir,
-        revision=surrogate_args.surrogate_model_revision,
-        token=other_args.token,
-        ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
     )
     surrogate_image_processor = AutoImageProcessor.from_pretrained(
         surrogate_args.surrogate_image_processor_name
@@ -511,28 +520,13 @@ def main():
         tokenizer=classifier_image_processor,
         data_collator=collate_fn,
     )
-
-    train_dataset_predict = classifier_trainer.predict(dataset["train"])
-
-    dataset["train_surrogate"] = dataset["train"].add_column(
-        "classifier_logits", iter(train_dataset_predict.predictions)
-    )
-    assert all(
-        train_dataset_predict.label_ids
-        == dataset["train_surrogate"].with_transform(lambda x: x)["labels"]
-    )
-    validation_dataset_predict = classifier_trainer.predict(dataset["validation"])
-    dataset["validation_surrogate"] = dataset["validation"].add_column(
-        "classifier_logits", iter(validation_dataset_predict.predictions)
-    )
-    assert all(
-        validation_dataset_predict.label_ids
-        == dataset["validation_surrogate"].with_transform(lambda x: x)["labels"]
-    )
-
+    # print("classifier_trainer.label_names", classifier_trainer.label_names)
+    # print(classifier_trainer.evaluate(dataset["validation_classifier"]))
     ########################################################
     # Add random generator
     ########################################################
+    dataset["train_surrogate"] = dataset["train"]
+    dataset["validation_surrogate"] = dataset["validation"]
     dataset["validation_surrogate"] = dataset["validation_surrogate"].add_column(
         "mask_random_seed",
         iter(
@@ -594,6 +588,10 @@ def main():
     # predictions and label_ids field) and has to return a dictionary string to float.
     def compute_metrics(p):
         """Computes accuracy on a batch of predictions"""
+        # import ipdb
+
+        # ipdb.set_trace()
+        # print(p.predictions.shape, p.label_ids.shape)
         return metric.compute(
             predictions=np.argmax(p.predictions[:, 0, :], axis=1),
             references=p.label_ids,
@@ -603,15 +601,11 @@ def main():
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
         labels = torch.tensor([example["labels"] for example in examples])
         masks = torch.tensor(np.array([example["masks"] for example in examples]))
-        classifier_logits = torch.tensor(
-            np.array([example["classifier_logits"] for example in examples])
-        )
 
         return {
             "pixel_values": pixel_values,
             "labels": labels,
             "masks": masks,
-            "classifier_logits": classifier_logits,
         }
 
     surrogate_trainer = Trainer(
@@ -623,6 +617,10 @@ def main():
         tokenizer=surrogate_image_processor,
         data_collator=collate_fn,
     )
+
+    # ipdb.set_trace()
+    # print("surrogate_trainer.label_names", surrogate_trainer.label_names)
+    # print(surrogate_trainer.evaluate(dataset["validation_surrogate"]))
 
     ########################################################
     # Detecting last checkpoint

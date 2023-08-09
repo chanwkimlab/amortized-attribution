@@ -9,17 +9,53 @@ from transformers import (
     PreTrainedModel,
 )
 from transformers.configuration_utils import PretrainedConfig
+from transformers.modeling_outputs import ImageClassifierOutput
 
 
 class SurrogateForImageClassificationConfig(PretrainedConfig):
     def __init__(
         self,
-        pretrained_model_name_or_path="facebook/deit-base-distilled-patch16-224",
-        config=None,
+        classifier_pretrained_model_name_or_path=None,
+        classifier_config=None,
+        classifier_from_tf=None,
+        classifier_cache_dir=None,
+        classifier_revision=None,
+        classifier_token=None,
+        classifier_ignore_mismatched_sizes=None,
+        surrogate_pretrained_model_name_or_path="google/vit-base-patch16-224",
+        surrogate_config=None,
+        surrogate_from_tf=None,
+        surrogate_cache_dir=None,
+        surrogate_revision=None,
+        surrogate_token=None,
+        surrogate_ignore_mismatched_sizes=None,
         **kwargs,
     ):
-        self.config = config
-        self.pretrained_model_name_or_path = pretrained_model_name_or_path
+        assert classifier_pretrained_model_name_or_path is None or isinstance(
+            classifier_pretrained_model_name_or_path, str
+        )
+        assert isinstance(surrogate_pretrained_model_name_or_path, str)
+
+        self.classifier_pretrained_model_name_or_path = (
+            classifier_pretrained_model_name_or_path
+        )
+        self.classifier_config = classifier_config
+        self.classifier_from_tf = classifier_from_tf
+        self.classifier_cache_dir = classifier_cache_dir
+        self.classifier_model_revision = classifier_revision
+        self.classifier_token = classifier_token
+        self.classifier_ignore_mismatched_sizes = classifier_ignore_mismatched_sizes
+
+        self.surrogate_pretrained_model_name_or_path = (
+            surrogate_pretrained_model_name_or_path
+        )
+        self.surrogate_config = surrogate_config
+        self.surrogate_from_tf = surrogate_from_tf
+        self.surrogate_cache_dir = surrogate_cache_dir
+        self.surrogate_model_revision = surrogate_revision
+        self.surrogate_token = surrogate_token
+        self.surrogate_ignore_mismatched_sizes = surrogate_ignore_mismatched_sizes
+
         super().__init__(**kwargs)
 
 
@@ -30,18 +66,36 @@ class SurrogateForImageClassification(PreTrainedModel):
     def __init__(
         self,
         config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
-        **kwargs,
     ):
         super().__init__(config)
-        self.model = AutoModelForImageClassification.from_pretrained(
-            pretrained_model_name_or_path=config.pretrained_model_name_or_path,
-            config=config.config,
-            **kwargs,
+
+        if config.classifier_pretrained_model_name_or_path is not None:
+            self.classifier = AutoModelForImageClassification.from_pretrained(
+                pretrained_model_name_or_path=config.classifier_pretrained_model_name_or_path,
+                config=config.classifier_config,
+                from_tf=config.classifier_from_tf,
+                cache_dir=config.classifier_cache_dir,
+                revision=config.classifier_model_revision,
+                token=config.classifier_token,
+                ignore_mismatched_sizes=config.classifier_ignore_mismatched_sizes,
+            )
+        else:
+            self.classifier = None
+
+        self.surrogate = AutoModelForImageClassification.from_pretrained(
+            pretrained_model_name_or_path=config.surrogate_pretrained_model_name_or_path,
+            config=config.surrogate_config,
+            from_tf=config.surrogate_from_tf,
+            cache_dir=config.surrogate_cache_dir,
+            revision=config.surrogate_model_revision,
+            token=config.surrogate_token,
+            ignore_mismatched_sizes=config.surrogate_ignore_mismatched_sizes,
         )
 
-    def forward(
-        self, pixel_values, masks, classifier_logits=None, labels=None, **kwargs
-    ):
+        assert self.surrogate.num_labels == self.classifier.num_labels
+
+    def forward(self, pixel_values, masks, labels=None, return_loss=True, **kwargs):
+        # infer patch size
         patch_size = (
             pixel_values.shape[2] * pixel_values.shape[3] / masks.shape[2]
         ) ** (0.5)
@@ -64,55 +118,48 @@ class SurrogateForImageClassification(PreTrainedModel):
             patch_size, dim=2
         )  # (num_batches * num_mask_samples, num_patches_width, num_patches_height) -> (num_batches * num_mask_samples, width, height)
 
-        # pixel_values_masked =
-        output = self.model(
+        surrogate_output = self.surrogate(
             pixel_values=pixel_values.repeat_interleave(num_mask_samples, dim=0)
             * (
                 masks_resize.unsqueeze(1)
             ),  # (num_batches * num_mask_samples, num_channels, width, height) x (num_batches * num_mask_samples, 1, width, height)
             labels=labels.repeat_interleave(num_mask_samples, dim=0),
             # **kwargs,
-            # **{i: kwargs[i] for i in kwargs if i != "labels"},
+            # **{i:  for i in kwargs if i != "labels"},
         )
-        # output2 = self.model(
-        #     pixel_values=pixel_values[1:].repeat_interleave(num_mask_samples, dim=0)
-        #     * (
-        #         masks_resize[1:].unsqueeze(1)
-        #     ),  # (num_batches * num_mask_samples, num_channels, width, height) x (num_batches * num_mask_samples, 1, width, height)
-        #     labels=kwargs["labels"][1:],
-        #     # **kwargs,
-        #     # **{i: kwargs[i] for i in kwargs if i != "labels"},
-        # )
-        # import ipdb
 
-        # ipdb.set_trace()
-        loss = None
-        if classifier_logits is not None:
-            if self.model.config.problem_type == "regression":
+        loss = 5
+        if return_loss:
+            self.classifier.eval()
+            with torch.no_grad():
+                classifier_output = self.classifier(pixel_values=pixel_values)
+
+            if self.surrogate.config.problem_type == "regression":
                 raise NotImplementedError
                 loss_fct = MSELoss()
                 if self.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), classifier_logits.squeeze())
                 else:
                     loss = loss_fct(logits, classifier_logits)
-            elif self.model.config.problem_type == "single_label_classification":
+            elif self.surrogate.config.problem_type == "single_label_classification":
                 loss_fct = KLDivLoss(reduction="batchmean", log_target=True)
                 loss = loss_fct(
                     input=torch.log_softmax(
-                        output["logits"].view(-1, self.model.num_labels), dim=1
+                        surrogate_output["logits"].view(-1, self.surrogate.num_labels),
+                        dim=1,
                     ),
                     target=torch.softmax(
-                        classifier_logits.repeat_interleave(
-                            num_mask_samples, dim=0
-                        ).view(-1, self.model.num_labels),
+                        classifier_output["logits"]
+                        .repeat_interleave(num_mask_samples, dim=0)
+                        .view(-1, self.surrogate.num_labels),
                         dim=1,
                     ),
                 )
-            elif self.model.config.problem_type == "multi_label_classification":
+            elif self.surrogate.config.problem_type == "multi_label_classification":
                 raise NotImplementedError
             else:
                 raise RuntimeError(
-                    f"Unknown problem type: {self.model.config.problem_type}"
+                    f"Unknown problem type: {self.surrogate.config.problem_type}"
                 )
         # output["loss_label"] = output.loss
         # print("output", output.keys())  #'loss', 'logits'
@@ -120,12 +167,27 @@ class SurrogateForImageClassification(PreTrainedModel):
 
         # ipdb.set_trace()
         # output["loss"] = loss
-        output.loss = loss
-        output.logits = output.logits.reshape(
-            pixel_values.shape[0], num_mask_samples, *(output.logits.shape[1:])
-        )
+        # import ipdb
 
-        return output
+        # output =
+        # ipdb.set_trace()
+        # print("output", surrogate_output)
+        # surrogate_output.loss = loss
+        # surrogate_output.logits = surrogate_output.logits.reshape(
+        #     pixel_values.shape[0],
+        #     num_mask_samples,
+        #     *(surrogate_output.logits.shape[1:]),
+        # )
+        # return surrogate_output
+
+        return ImageClassifierOutput(
+            loss=loss,
+            logits=surrogate_output.logits.reshape(
+                pixel_values.shape[0],
+                num_mask_samples,
+                *surrogate_output.logits.shape[1:],
+            ),
+        )
 
 
 class AutoModelForImageClassificationSurrogate(AutoModelForImageClassification):
