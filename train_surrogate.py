@@ -42,7 +42,11 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-from models import AutoModelForImageClassificationSurrogate
+from models import (
+    AutoModelForImageClassificationSurrogate,
+    SurrogateForImageClassification,
+    SurrogateForImageClassificationConfig,
+)
 from utils import generate_mask, get_image_transform
 
 """ Fine-tuning a 🤗 Transformers model for image classification"""
@@ -427,10 +431,14 @@ def main():
         revision=surrogate_args.surrogate_model_revision,
         token=other_args.token,
     )
-    surrogate = AutoModelForImageClassificationSurrogate.from_pretrained(
-        surrogate_args.surrogate_model_name_or_path,
-        from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
+    surrogate_for_image_classification_config = SurrogateForImageClassificationConfig(
+        pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
         config=surrogate_config,
+    )
+
+    surrogate = SurrogateForImageClassification(
+        config=surrogate_for_image_classification_config,
+        from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
         cache_dir=surrogate_args.surrogate_cache_dir,
         revision=surrogate_args.surrogate_model_revision,
         token=other_args.token,

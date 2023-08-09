@@ -1,6 +1,133 @@
+import os
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
 import torch
 from torch.nn import KLDivLoss
-from transformers import AutoModelForImageClassification
+from transformers import (
+    AutoModelForImageClassification,
+    PretrainedConfig,
+    PreTrainedModel,
+)
+from transformers.configuration_utils import PretrainedConfig
+
+
+class SurrogateForImageClassificationConfig(PretrainedConfig):
+    model_type = "surrogate_for_image_classification"
+
+    def __init__(
+        self,
+        pretrained_model_name_or_path="facebook/deit-base-distilled-patch16-224",
+        config=None,
+        **kwargs,
+    ):
+        self.config = config
+        self.pretrained_model_name_or_path = pretrained_model_name_or_path
+        super().__init__(**kwargs)
+
+
+# https://huggingface.co/docs/transformers/custom_models
+class SurrogateForImageClassification(PreTrainedModel):
+    config_class = SurrogateForImageClassificationConfig
+
+    def __init__(
+        self,
+        config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
+        **kwargs,
+    ):
+        super().__init__(config)
+        self.model = AutoModelForImageClassification.from_pretrained(
+            pretrained_model_name_or_path=config.pretrained_model_name_or_path,
+            config=config.config,
+            **kwargs,
+        )
+
+    def forward(
+        self, pixel_values, masks, classifier_logits=None, labels=None, **kwargs
+    ):
+        patch_size = (
+            pixel_values.shape[2] * pixel_values.shape[3] / masks.shape[2]
+        ) ** (0.5)
+        num_mask_samples = masks.shape[1]
+        assert patch_size.is_integer(), "The patch size is not an integer"
+        patch_size = int(patch_size)
+
+        # resize masks
+        masks_resize = masks.reshape(
+            -1, masks.shape[2]
+        )  # (num_batches, num_mask_samples, num_patches) -> (num_batches * num_mask_samples, num_patches)
+        masks_resize = masks_resize.reshape(
+            -1,
+            int(pixel_values.shape[2] // patch_size),
+            int(pixel_values.shape[3] / patch_size),
+        )  # (num_batches * num_mask_samples, num_patches) -> (num_batches * num_mask_samples, num_patches_width, num_patches_height)
+        masks_resize = masks_resize.repeat_interleave(
+            patch_size, dim=1
+        ).repeat_interleave(
+            patch_size, dim=2
+        )  # (num_batches * num_mask_samples, num_patches_width, num_patches_height) -> (num_batches * num_mask_samples, width, height)
+
+        # pixel_values_masked =
+        output = self.model(
+            pixel_values=pixel_values.repeat_interleave(num_mask_samples, dim=0)
+            * (
+                masks_resize.unsqueeze(1)
+            ),  # (num_batches * num_mask_samples, num_channels, width, height) x (num_batches * num_mask_samples, 1, width, height)
+            labels=labels.repeat_interleave(num_mask_samples, dim=0),
+            # **kwargs,
+            # **{i: kwargs[i] for i in kwargs if i != "labels"},
+        )
+        # output2 = self.model(
+        #     pixel_values=pixel_values[1:].repeat_interleave(num_mask_samples, dim=0)
+        #     * (
+        #         masks_resize[1:].unsqueeze(1)
+        #     ),  # (num_batches * num_mask_samples, num_channels, width, height) x (num_batches * num_mask_samples, 1, width, height)
+        #     labels=kwargs["labels"][1:],
+        #     # **kwargs,
+        #     # **{i: kwargs[i] for i in kwargs if i != "labels"},
+        # )
+        # import ipdb
+
+        # ipdb.set_trace()
+        loss = None
+        if classifier_logits is not None:
+            if self.model.config.problem_type == "regression":
+                raise NotImplementedError
+                loss_fct = MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), classifier_logits.squeeze())
+                else:
+                    loss = loss_fct(logits, classifier_logits)
+            elif self.model.config.problem_type == "single_label_classification":
+                loss_fct = KLDivLoss(reduction="batchmean", log_target=True)
+                loss = loss_fct(
+                    input=torch.log_softmax(
+                        output["logits"].view(-1, self.model.num_labels), dim=1
+                    ),
+                    target=torch.softmax(
+                        classifier_logits.repeat_interleave(
+                            num_mask_samples, dim=0
+                        ).view(-1, self.model.num_labels),
+                        dim=1,
+                    ),
+                )
+            elif self.model.config.problem_type == "multi_label_classification":
+                raise NotImplementedError
+            else:
+                raise RuntimeError(
+                    f"Unknown problem type: {self.model.config.problem_type}"
+                )
+        # output["loss_label"] = output.loss
+        # print("output", output.keys())  #'loss', 'logits'
+        # import ipdb
+
+        # ipdb.set_trace()
+        # output["loss"] = loss
+        output.loss = loss
+        output.logits = output.logits.reshape(
+            pixel_values.shape[0], num_mask_samples, *(output.logits.shape[1:])
+        )
+
+        return output
 
 
 class AutoModelForImageClassificationSurrogate(AutoModelForImageClassification):

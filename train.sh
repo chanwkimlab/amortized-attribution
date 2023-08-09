@@ -20,7 +20,10 @@ CUDA_VISIBLE_DEVICES=2 python train_classifier.py \
     --seed 42
 # vit-base on imagenette
 # train classifier
-CUDA_VISIBLE_DEVICES=2 WANDB_PROJECT=xai-amortization WANDB_NAME=vitbase_imagenette  python train_classifier.py \
+CUDA_VISIBLE_DEVICES=2 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette  \
+python train_classifier.py \
     --model_name_or_path google/vit-base-patch16-224 \
     --ignore_mismatched_sizes True \
     --dataset_name frgfm/imagenette \
@@ -46,8 +49,8 @@ CUDA_VISIBLE_DEVICES=2 WANDB_PROJECT=xai-amortization WANDB_NAME=vitbase_imagene
 # train surrogate (GPU util: train=80%, val=50%)
 CUDA_VISIBLE_DEVICES=2 \
 WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_surrogate_ \
-python train_surrogate.py \
+WANDB_NAME=vitbase_imagenette_surrogate_new \
+python train_surrogate_new.py \
     --classifier_model_name_or_path ./logs/vitbase_imagenette \
     --classifier_ignore_mismatched_sizes True \
     --surrogate_model_name_or_path ./logs/vitbase_imagenette \
@@ -69,7 +72,7 @@ python train_surrogate.py \
     --load_best_model_at_end True \
     --save_total_limit 3 \
     --seed 42 \
-    --output_dir ./logs/vitbase_imagenette_surrogate_ \
+    --output_dir ./logs/vitbase_imagenette_surrogate_new \
     --report_to wandb
 
 
