@@ -40,10 +40,10 @@ CUDA_VISIBLE_DEVICES=2 WANDB_PROJECT=xai-amortization WANDB_NAME=vitbase_imagene
     --load_best_model_at_end True \
     --save_total_limit 3 \
     --seed 42 \
-    --output_dir ./logs/vitbase_imagenette \
+    --output_dir ./logs/vitbase_imagenette_classifier \
     --report_to wandb 
 
-# train surrogate 
+# train surrogate (GPU util: train=80%, val=50%)
 CUDA_VISIBLE_DEVICES=2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_ \
@@ -54,16 +54,14 @@ python train_surrogate.py \
     --surrogate_ignore_mismatched_sizes True \
     --dataset_name frgfm/imagenette \
     --dataset_config_name 160px \
-    --max_train_samples 200 \
-    --max_eval_samples 200 \
     --remove_unused_columns False \
     --do_train \
     --do_eval \
     --fp16 True \
     --learning_rate 2e-5 \
     --num_train_epochs 25 \
-    --per_device_train_batch_size 32 \
-    --per_device_eval_batch_size 32 \
+    --per_device_train_batch_size 64 \
+    --per_device_eval_batch_size 64 \
     --logging_strategy steps \
     --logging_steps 10 \
     --evaluation_strategy epoch \
@@ -72,7 +70,7 @@ python train_surrogate.py \
     --save_total_limit 3 \
     --seed 42 \
     --output_dir ./logs/vitbase_imagenette_surrogate_ \
-    --report_to none
+    --report_to wandb
 
 
 # train explainer 
