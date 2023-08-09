@@ -49,8 +49,8 @@ python train_classifier.py \
 # train surrogate (GPU util: train=80%, val=50%)
 CUDA_VISIBLE_DEVICES=2 \
 WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_surrogate_new \
-python train_surrogate_new.py \
+WANDB_NAME=vitbase_imagenette_surrogate \
+python train_surrogate.py \
     --classifier_model_name_or_path ./logs/vitbase_imagenette \
     --classifier_ignore_mismatched_sizes True \
     --surrogate_model_name_or_path ./logs/vitbase_imagenette \
@@ -72,7 +72,7 @@ python train_surrogate_new.py \
     --load_best_model_at_end True \
     --save_total_limit 3 \
     --seed 42 \
-    --output_dir ./logs/vitbase_imagenette_surrogate_new \
+    --output_dir ./logs/vitbase_imagenette_surrogate \
     --report_to wandb
 
 
@@ -95,8 +95,8 @@ python train_explainer.py \
     --fp16 True \
     --learning_rate 2e-5 \
     --num_train_epochs 25 \
-    --per_device_train_batch_size 128 \
-    --per_device_eval_batch_size 128 \
+    --per_device_train_batch_size 64 \
+    --per_device_eval_batch_size 64 \
     --logging_strategy steps \
     --logging_steps 10 \
     --evaluation_strategy epoch \

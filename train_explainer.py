@@ -28,15 +28,25 @@ from datasets import load_dataset
 from PIL import Image
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.nn import functional as F
-from transformers import (MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING, AutoConfig,
-                          AutoImageProcessor, AutoModelForImageClassification,
-                          HfArgumentParser, Trainer, TrainingArguments,
-                          set_seed)
+from transformers import (
+    MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
+    AutoConfig,
+    AutoImageProcessor,
+    AutoModelForImageClassification,
+    HfArgumentParser,
+    Trainer,
+    TrainingArguments,
+    set_seed,
+)
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-from models import AutoModelForImageClassificationSurrogate
+from models import (
+    AutoModelForImageClassificationSurrogate,
+    SurrogateForImageClassification,
+    SurrogateForImageClassificationConfig,
+)
 from utils import generate_mask, get_image_transform
 
 """ Fine-tuning a 🤗 Transformers model for image classification"""
@@ -389,10 +399,13 @@ def main():
         revision=surrogate_args.surrogate_model_revision,
         token=other_args.token,
     )
-    surrogate = AutoModelForImageClassificationSurrogate.from_pretrained(
-        surrogate_args.surrogate_model_name_or_path,
-        from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
+    surrogate_for_image_classification_config = SurrogateForImageClassificationConfig(
+        pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
         config=surrogate_config,
+    )
+    surrogate = SurrogateForImageClassification(
+        config=surrogate_for_image_classification_config,
+        from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
         cache_dir=surrogate_args.surrogate_cache_dir,
         revision=surrogate_args.surrogate_model_revision,
         token=other_args.token,
@@ -467,19 +480,6 @@ def main():
     ########################################################
     dataset["train_surrogate"] = dataset["train"]
     dataset["validation_surrogate"] = dataset["validation"]
-    # # Set the training transforms
-    # if training_args.do_train:
-    # dataset["train_surrogate"] = dataset["train"]
-    #     dataset["train_surrogate"].set_transform(
-    #         get_image_transform(surrogate_image_processor)["train_transform"]
-    #     )
-
-    # if training_args.do_eval:
-    #     # Set the validation transforms
-    #     dataset["validation_surrogate"] = dataset["validation"]
-    #     dataset["validation_surrogate"].set_transform(
-    #         get_image_transform(surrogate_image_processor)["eval_transform"]
-    #     )
 
     dataset["validation_surrogate"] = dataset["validation_surrogate"].add_column(
         "mask_random_seed",
@@ -494,28 +494,46 @@ def main():
 
     def tranform_mask(example_batch):
         """Add mask to example_batch"""
+        mask_full_empty = generate_mask(
+            num_features=14 * 14,
+            num_mask_samples=2,
+            paired_mask_samples=True,
+            mode="full",
+            random_state=None,
+        )
+
         if "mask_random_seed" in example_batch:
             example_batch["masks"] = [
-                generate_mask(
-                    num_features=14 * 14,
-                    num_mask_samples=1,
-                    paired_mask_samples=False,
-                    mode="uniform",
-                    random_state=np.random.RandomState(
-                        example_batch["mask_random_seed"][idx]
-                    ),
-                ).squeeze(0)
+                np.vtack(
+                    [
+                        mask_full_empty,
+                        generate_mask(
+                            num_features=14 * 14,
+                            num_mask_samples=2,
+                            paired_mask_samples=True,
+                            mode="shapley",
+                            random_state=np.random.RandomState(
+                                example_batch["mask_random_seed"][idx]
+                            ),
+                        ),
+                    ]
+                )
                 for idx in range(len(example_batch["labels"]))
             ]
         else:
             example_batch["masks"] = [
-                generate_mask(
-                    num_features=14 * 14,
-                    num_mask_samples=1,
-                    paired_mask_samples=False,
-                    mode="uniform",
-                    random_state=None,
-                ).squeeze(0)
+                np.vstack(
+                    [
+                        mask_full_empty,
+                        generate_mask(
+                            num_features=14 * 14,
+                            num_mask_samples=2,
+                            paired_mask_samples=True,
+                            mode="shapley",
+                            random_state=None,
+                        ),
+                    ]
+                )
                 for idx in range(len(example_batch["labels"]))
             ]
         return example_batch
@@ -547,7 +565,7 @@ def main():
         tokenizer=surrogate_image_processor,
         data_collator=collate_fn,
     )
-
+    ipdb.set_trace()
     train_dataset_predict = surrogate_trainer.predict(dataset["train"])
 
     dataset["train_explainer"] = dataset["train"].add_column(

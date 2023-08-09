@@ -12,8 +12,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 
 class SurrogateForImageClassificationConfig(PretrainedConfig):
-    model_type = "surrogate_for_image_classification"
-
     def __init__(
         self,
         pretrained_model_name_or_path="facebook/deit-base-distilled-patch16-224",

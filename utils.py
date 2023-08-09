@@ -59,6 +59,10 @@ def generate_mask(
                 np.arange(num_features - 1), p=probs, size=[num_samples_, 1]
             )
         ).astype("int")
+    elif mode == "full":
+        masks = np.ones((num_samples_, num_features)).astype("int")
+    elif mode == "empty":
+        masks = np.zeros((num_samples_, num_features)).astype("int")
     else:
         raise ValueError("'mode' must be 'random' or 'shapley'")
 
