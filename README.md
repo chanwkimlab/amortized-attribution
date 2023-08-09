@@ -36,8 +36,13 @@ ipython kernel install --name "xai-amortization2" --user
 * generate masks (change `transform`` function) also deterministic for training
   * (done) by adding transform function.
 * custom loss function (define new `Trainer` class)
-  * 
+  * (done) defined new model class
 
+
+* model output
+  * use hidden states
+* evaluate multiple times
+  * first evaluate. 
 
 
 ## Note

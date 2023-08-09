@@ -548,7 +548,7 @@ def main():
                     random_state=np.random.RandomState(
                         example_batch["mask_random_seed"][idx]
                     ),
-                ).squeeze(0)
+                )
                 for idx in range(len(example_batch["labels"]))
             ]
         else:
@@ -559,7 +559,7 @@ def main():
                     paired_mask_samples=False,
                     mode="uniform",
                     random_state=None,
-                ).squeeze(0)
+                )
                 for idx in range(len(example_batch["labels"]))
             ]
         return example_batch
@@ -587,7 +587,8 @@ def main():
     def compute_metrics(p):
         """Computes accuracy on a batch of predictions"""
         return metric.compute(
-            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+            predictions=np.argmax(p.predictions[:, 0, :], axis=1),
+            references=p.label_ids,
         )
 
     def collate_fn(examples):

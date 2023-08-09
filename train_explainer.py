@@ -28,16 +28,10 @@ from datasets import load_dataset
 from PIL import Image
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.nn import functional as F
-from transformers import (
-    MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
-    AutoConfig,
-    AutoImageProcessor,
-    AutoModelForImageClassification,
-    HfArgumentParser,
-    Trainer,
-    TrainingArguments,
-    set_seed,
-)
+from transformers import (MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING, AutoConfig,
+                          AutoImageProcessor, AutoModelForImageClassification,
+                          HfArgumentParser, Trainer, TrainingArguments,
+                          set_seed)
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
@@ -554,7 +548,6 @@ def main():
         data_collator=collate_fn,
     )
 
-    ipdb.set_trace()
     train_dataset_predict = surrogate_trainer.predict(dataset["train"])
 
     dataset["train_explainer"] = dataset["train"].add_column(

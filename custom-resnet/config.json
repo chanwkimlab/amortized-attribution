@@ -1,0 +1,17 @@
+{
+  "avg_down": true,
+  "base_width": 64,
+  "block_type": "bottleneck",
+  "cardinality": 1,
+  "input_channels": 3,
+  "layers": [
+    3,
+    4,
+    6,
+    3
+  ],
+  "model_type": "resnet",
+  "num_classes": 1000,
+  "stem_type": "deep",
+  "transformers_version": "4.32.0.dev0"
+}
