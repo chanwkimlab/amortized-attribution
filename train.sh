@@ -87,16 +87,14 @@ python train_explainer.py \
     --explainer_ignore_mismatched_sizes True \
     --dataset_name frgfm/imagenette \
     --dataset_config_name 160px \
-    --max_train_samples 200 \
-    --max_eval_samples 200 \
     --remove_unused_columns False \
     --do_train \
     --do_eval \
     --fp16 True \
-    --learning_rate 2e-5 \
+    --learning_rate 1e-4 \
     --num_train_epochs 25 \
-    --per_device_train_batch_size 64 \
-    --per_device_eval_batch_size 64 \
+    --per_device_train_batch_size 16 \
+    --per_device_eval_batch_size 16 \
     --logging_strategy steps \
     --logging_steps 10 \
     --evaluation_strategy epoch \
@@ -105,7 +103,36 @@ python train_explainer.py \
     --save_total_limit 3 \
     --seed 42 \
     --output_dir ./logs/vitbase_imagenette_explainer \
-    --report_to wandb        
+    --report_to none        
+
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_explainer \
+python train_explainer.py \
+    --surrogate_model_name_or_path ./logs/vitbase_imagenette_surrogate \
+    --surrogate_ignore_mismatched_sizes True \
+    --explainer_model_name_or_path ./logs/vitbase_imagenette_surrogate \
+    --explainer_ignore_mismatched_sizes True \
+    --dataset_name frgfm/imagenette \
+    --dataset_config_name 160px \
+    --remove_unused_columns False \
+    --do_train \
+    --do_eval \
+    --fp16 True \
+    --learning_rate 1e-4 \
+    --num_train_epochs 25 \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --logging_strategy steps \
+    --logging_steps 10 \
+    --evaluation_strategy epoch \
+    --save_strategy epoch \
+    --load_best_model_at_end True \
+    --save_total_limit 3 \
+    --seed 42 \
+    --output_dir ./logs/vitbase_imagenette_explainer_ \
+    --report_to none  
 
 # resnet50 on imagenette
 CUDA_VISIBLE_DEVICES=2 python train_classifier.py \
