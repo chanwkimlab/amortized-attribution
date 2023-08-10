@@ -9,11 +9,8 @@ pip install transformers==4.32.0 evaluate==0.4.0 datasets==2.14.3 accelerate==0.
 pip install git+https://github.com/huggingface/transformers
 pip install jupyterlab wandb ipdb gpustat
 ipython kernel install --name "xai-amortization" --user
-```
 
-## Set up git filter
-
-```bash
+# Set up git filter
 git config filter.strip-notebook-output.clean 'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --ClearMetadataPreprocessor.enabled=True --to=notebook --stdin --stdout --log-level=ERROR'
 ```
 
