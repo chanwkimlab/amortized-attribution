@@ -11,6 +11,12 @@ pip install jupyterlab wandb ipdb gpustat
 ipython kernel install --name "xai-amortization" --user
 ```
 
+## Set up git filter
+
+```bash
+git config filter.strip-notebook-output.clean 'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --ClearMetadataPreprocessor.enabled=True --to=notebook --stdin --stdout --log-level=ERROR'
+```
+
 ## To-do
 
 * deterministic sampling
@@ -38,8 +44,3 @@ This repository was inspired by the following repositories:
 * [ViT-Shapley](https://github.com/suinleelab/vit-shapley)
 * [Huggingface example - Image classification](https://github.com/huggingface/transformers/tree/149cb0cce2df3f932de58c6d05cec548600553e2/examples/pytorch/image-classification)
 
-## Set up git filter
-
-```bash
-git config filter.strip-notebook-output.clean 'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --ClearMetadataPreprocessor.enabled=True --to=notebook --stdin --stdout --log-level=ERROR'
-```
