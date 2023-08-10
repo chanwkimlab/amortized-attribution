@@ -559,10 +559,11 @@ def main():
 
         # ipdb.set_trace()
         # print(p.predictions.shape, p.label_ids.shape)
-        return metric.compute(
-            predictions=np.argmax(p.predictions[:, 0, :], axis=1),
-            references=p.label_ids,
-        )
+        # return metric.compute(
+        #     predictions=np.argmax(p.predictions[:, 0, :], axis=1),
+        #     references=p.label_ids,
+        # )
+        return {}
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
