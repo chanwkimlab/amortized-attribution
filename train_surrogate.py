@@ -12,6 +12,7 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
+import json
 import logging
 import os
 import sys
@@ -23,6 +24,7 @@ import evaluate
 import ipdb
 import numpy as np
 import torch
+import tqdm
 import transformers
 from datasets import load_dataset
 from PIL import Image
@@ -104,9 +106,19 @@ class DataTrainingArguments:
     validation_dir: Optional[str] = field(
         default=None, metadata={"help": "A folder containing the validation data."}
     )
-    train_val_split: Optional[float] = field(
+
+    test_dir: Optional[str] = field(
+        default=None, metadata={"help": "A folder containing the test data."}
+    )
+
+    train_validation_split: Optional[float] = field(
         default=0.15, metadata={"help": "Percent to split off of train for validation."}
     )
+
+    validation_test_split: Optional[float] = field(
+        default=0.5, metadata={"help": "Percent to split off of val for test."}
+    )
+
     max_train_samples: Optional[int] = field(
         default=None,
         metadata={
@@ -116,11 +128,20 @@ class DataTrainingArguments:
             )
         },
     )
-    max_eval_samples: Optional[int] = field(
+    max_val_samples: Optional[int] = field(
         default=None,
         metadata={
             "help": (
-                "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
+                "For debugging purposes or quicker training, truncate the number of validation examples to this "
+                "value if set."
+            )
+        },
+    )
+    max_test_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "For debugging purposes or quicker training, truncate the number of test examples to this "
                 "value if set."
             )
         },
@@ -137,6 +158,18 @@ class DataTrainingArguments:
 
 @dataclass
 class OtherArguments:
+    extract_output: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Extract output from the model. If None, will not extract output with N masks."
+        },
+    )
+
+    num_mask_samples: Optional[int] = field(
+        default=1,
+        metadata={"help": "Number of masks to use for extracting output."},
+    )
+
     use_auth_token: bool = field(
         default=None,
         metadata={
@@ -344,7 +377,7 @@ def main():
             dataset = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
-                cache_dir=surrogate_args.surrogate_cache_dir,
+                cache_dir=data_args.dataset_cache_dir,
                 task=None,
                 token=other_args.token,
             )
@@ -357,7 +390,7 @@ def main():
             dataset = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
-                cache_dir=surrogate_args.surrogate_cache_dir,
+                cache_dir=data_args.dataset_cache_dir,
                 task="image-classification",
                 token=other_args.token,
             )
@@ -367,6 +400,8 @@ def main():
             data_files["train"] = os.path.join(data_args.train_dir, "**")
         if data_args.validation_dir is not None:
             data_files["validation"] = os.path.join(data_args.validation_dir, "**")
+        if data_args.test_dir is not None:
+            data_files["test"] = os.path.join(data_args.test_dir, "**")
         dataset = load_dataset(
             "imagefolder",
             data_files=data_files,
@@ -375,13 +410,28 @@ def main():
         )
 
     # If we don't have a validation split, split off a percentage of train as validation.
-    data_args.train_val_split = (
-        None if "validation" in dataset.keys() else data_args.train_val_split
+    data_args.train_validation_split = (
+        None if "validation" in dataset.keys() else data_args.train_validation_split
     )
-    if isinstance(data_args.train_val_split, float) and data_args.train_val_split > 0.0:
-        split = dataset["train"].train_test_split(data_args.train_val_split)
+    if (
+        isinstance(data_args.train_validation_split, float)
+        and data_args.train_validation_split > 0.0
+    ):
+        split = dataset["train"].train_test_split(data_args.train_validation_split)
         dataset["train"] = split["train"]
         dataset["validation"] = split["test"]
+
+    data_args.validation_test_split = (
+        None if "test" in dataset.keys() else data_args.validation_test_split
+    )
+
+    if (
+        isinstance(data_args.validation_test_split, float)
+        and data_args.validation_test_split > 0.0
+    ):
+        split = dataset["validation"].train_test_split(data_args.validation_test_split)
+        dataset["validation"] = split["train"]
+        dataset["test"] = split["test"]
 
     # Prepare label mappings.
     # We'll include these in the model's config to get human readable labels in the Inference API.
@@ -436,28 +486,50 @@ def main():
         revision=surrogate_args.surrogate_model_revision,
         token=other_args.token,
     )
-    surrogate_for_image_classification_config = SurrogateForImageClassificationConfig(
-        classifier_pretrained_model_name_or_path=classifier_args.classifier_model_name_or_path,
-        classifier_config=classifier_config,
-        classifier_from_tf=bool(
-            ".ckpt" in classifier_args.classifier_model_name_or_path
-        ),
-        classifier_cache_dir=classifier_args.classifier_cache_dir,
-        classifier_revision=classifier_args.classifier_model_revision,
-        classifier_token=other_args.token,
-        classifier_ignore_mismatched_sizes=classifier_args.classifier_ignore_mismatched_sizes,
-        surrogate_pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
-        surrogate_config=surrogate_config,
-        surrogate_from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
-        surrogate_cache_dir=surrogate_args.surrogate_cache_dir,
-        surrogate_revision=surrogate_args.surrogate_model_revision,
-        surrogate_token=other_args.token,
-        surrogate_ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
-    )
 
-    surrogate = SurrogateForImageClassification(
-        config=surrogate_for_image_classification_config,
-    )
+    if os.path.isfile(
+        f"{surrogate_args.surrogate_model_name_or_path}/config.json"
+    ) and (
+        json.loads(
+            open(f"{surrogate_args.surrogate_model_name_or_path}/config.json").read()
+        )["architectures"][0]
+        == "SurrogateForImageClassification"
+    ):
+        surrogate = SurrogateForImageClassification.from_pretrained(
+            surrogate_args.surrogate_model_name_or_path,
+            from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
+            config=surrogate_config,
+            cache_dir=surrogate_args.surrogate_cache_dir,
+            revision=surrogate_args.surrogate_model_revision,
+            token=other_args.token,
+            ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
+        )
+    else:
+        surrogate_for_image_classification_config = SurrogateForImageClassificationConfig(
+            classifier_pretrained_model_name_or_path=classifier_args.classifier_model_name_or_path,
+            classifier_config=classifier_config,
+            classifier_from_tf=bool(
+                ".ckpt" in classifier_args.classifier_model_name_or_path
+            ),
+            classifier_cache_dir=classifier_args.classifier_cache_dir,
+            classifier_revision=classifier_args.classifier_model_revision,
+            classifier_token=other_args.token,
+            classifier_ignore_mismatched_sizes=classifier_args.classifier_ignore_mismatched_sizes,
+            surrogate_pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
+            surrogate_config=surrogate_config,
+            surrogate_from_tf=bool(
+                ".ckpt" in surrogate_args.surrogate_model_name_or_path
+            ),
+            surrogate_cache_dir=surrogate_args.surrogate_cache_dir,
+            surrogate_revision=surrogate_args.surrogate_model_revision,
+            surrogate_token=other_args.token,
+            surrogate_ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
+        )
+
+        surrogate = SurrogateForImageClassification(
+            config=surrogate_for_image_classification_config,
+        )
+
     surrogate_image_processor = AutoImageProcessor.from_pretrained(
         surrogate_args.surrogate_image_processor_name
         or surrogate_args.surrogate_model_name_or_path,
@@ -473,83 +545,85 @@ def main():
     if training_args.do_train:
         if "train" not in dataset:
             raise ValueError("--do_train requires a train dataset")
-        if data_args.max_train_samples is not None:
-            dataset["train"] = (
-                dataset["train"]
-                .shuffle(seed=training_args.seed)
-                .select(range(data_args.max_train_samples))
-            )
+        if "validation" not in dataset:
+            raise ValueError("--do_train requires a validation dataset")
+
+    if data_args.max_train_samples is not None:
+        dataset["train"] = (
+            dataset["train"]
+            .shuffle(seed=training_args.seed)
+            .select(range(data_args.max_train_samples))
+        )
+    if data_args.max_val_samples is not None:
+        dataset["validation"] = (
+            dataset["validation"]
+            .shuffle(seed=training_args.seed)
+            .select(range(data_args.max_val_samples))
+        )
 
     if training_args.do_eval:
-        if "validation" not in dataset:
-            raise ValueError("--do_eval requires a validation dataset")
-        if data_args.max_eval_samples is not None:
-            dataset["validation"] = (
-                dataset["validation"]
-                .shuffle(seed=training_args.seed)
-                .select(range(data_args.max_eval_samples))
-            )
+        if "test" not in dataset:
+            raise ValueError("--do_eval requires a test dataset")
+
+    if data_args.max_test_samples is not None:
+        dataset["test"] = (
+            dataset["test"]
+            .shuffle(seed=training_args.seed)
+            .select(range(data_args.max_test_samples))
+        )
 
     ########################################################
     # Align dataset to model settings
     ########################################################
     # Set the training transforms
-    if training_args.do_train:
-        dataset["train_classifier"] = dataset["train"]
-        dataset["train_classifier"].set_transform(
-            get_image_transform(classifier_image_processor)["train_transform"]
-        )
+    # if training_args.do_train:
+    #     dataset["train_classifier"] = dataset["train"]
+    #     dataset["train_classifier"].set_transform(
+    #         get_image_transform(classifier_image_processor)["train_transform"]
+    #     )
+    #     dataset["validation_classifier"] = dataset["validation"]
+    #     dataset["validation_classifier"].set_transform(
+    #         get_image_transform(classifier_image_processor)["eval_transform"]
+    #     )
 
-    # Set the validation transforms
-    if training_args.do_eval:
-        dataset["validation_classifier"] = dataset["validation"]
-        dataset["validation_classifier"].set_transform(
-            get_image_transform(classifier_image_processor)["eval_transform"]
-        )
+    # # Set the validation transforms
+    # if training_args.do_eval:
+    #     dataset["test_classifier"] = dataset["test"]
+    #     dataset["test_classifier"].set_transform(
+    #         get_image_transform(classifier_image_processor)["eval_transform"]
+    #     )
 
     ########################################################
     # Evaluate the original model
     ########################################################
 
-    def collate_fn(examples):
-        pixel_values = torch.stack([example["pixel_values"] for example in examples])
-        labels = torch.tensor([example["labels"] for example in examples])
-        return {"pixel_values": pixel_values, "labels": labels}
+    # def collate_fn(examples):
+    #     pixel_values = torch.stack([example["pixel_values"] for example in examples])
+    #     labels = torch.tensor([example["labels"] for example in examples])
+    #     return {"pixel_values": pixel_values, "labels": labels}
 
-    classifier_trainer = Trainer(
-        model=classifier,
-        args=training_args,
-        train_dataset=None,
-        eval_dataset=None,
-        compute_metrics=None,
-        tokenizer=classifier_image_processor,
-        data_collator=collate_fn,
-    )
+    # classifier_trainer = Trainer(
+    #     model=classifier,
+    #     args=training_args,
+    #     train_dataset=None,
+    #     eval_dataset=None,
+    #     compute_metrics=None,
+    #     tokenizer=classifier_image_processor,
+    #     data_collator=collate_fn,
+    # )
     # print("classifier_trainer.label_names", classifier_trainer.label_names)
     # print(classifier_trainer.evaluate(dataset["validation_classifier"]))
     ########################################################
     # Add random generator
     ########################################################
-    dataset["train_surrogate"] = dataset["train"]
-    dataset["validation_surrogate"] = dataset["validation"]
-    dataset["validation_surrogate"] = dataset["validation_surrogate"].add_column(
-        "mask_random_seed",
-        iter(
-            np.random.RandomState(training_args.seed).randint(
-                0,
-                len(dataset["validation_surrogate"]),
-                size=len(dataset["validation_surrogate"]),
-            )
-        ),
-    )
 
-    def tranform_mask(example_batch):
+    def transform_mask(example_batch):
         """Add mask to example_batch"""
         if "mask_random_seed" in example_batch:
             example_batch["masks"] = [
                 generate_mask(
                     num_features=14 * 14,
-                    num_mask_samples=1,
+                    num_mask_samples=other_args.num_mask_samples,
                     paired_mask_samples=False,
                     mode="uniform",
                     random_state=np.random.RandomState(
@@ -562,7 +636,7 @@ def main():
             example_batch["masks"] = [
                 generate_mask(
                     num_features=14 * 14,
-                    num_mask_samples=1,
+                    num_mask_samples=other_args.num_mask_samples,
                     paired_mask_samples=False,
                     mode="uniform",
                     random_state=None,
@@ -571,14 +645,26 @@ def main():
             ]
         return example_batch
 
-    dataset["train_surrogate"].set_transform(
-        lambda x: tranform_mask(
+    dataset_surrogate = dataset.copy()
+    dataset_surrogate["validation"] = dataset_surrogate["validation"].add_column(
+        "mask_random_seed",
+        iter(
+            np.random.RandomState(training_args.seed).randint(
+                0,
+                len(dataset_surrogate["validation"]),
+                size=len(dataset_surrogate["validation"]),
+            )
+        ),
+    )
+
+    dataset_surrogate["train"].set_transform(
+        lambda x: transform_mask(
             get_image_transform(surrogate_image_processor)["train_transform"](x)
         )
     )
 
-    dataset["validation_surrogate"].set_transform(
-        lambda x: tranform_mask(
+    dataset_surrogate["validation"].set_transform(
+        lambda x: transform_mask(
             get_image_transform(surrogate_image_processor)["eval_transform"](x)
         )
     )
@@ -597,8 +683,9 @@ def main():
 
         # ipdb.set_trace()
         # print(p.predictions.shape, p.label_ids.shape)
+        # print(p)
         return metric.compute(
-            predictions=np.argmax(p.predictions[:, 0, :], axis=1),
+            predictions=np.argmax(p.predictions[0][:, 0, :], axis=1),
             references=p.label_ids,
         )
 
@@ -616,8 +703,8 @@ def main():
     surrogate_trainer = Trainer(
         model=surrogate,
         args=training_args,
-        train_dataset=dataset["train_surrogate"] if training_args.do_train else None,
-        eval_dataset=dataset["validation_surrogate"] if training_args.do_eval else None,
+        train_dataset=dataset_surrogate["train"] if training_args.do_train else None,
+        eval_dataset=dataset_surrogate["validation"] if training_args.do_eval else None,
         compute_metrics=compute_metrics,
         tokenizer=surrogate_image_processor,
         data_collator=collate_fn,
@@ -649,6 +736,126 @@ def main():
                 f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
+
+    if other_args.extract_output:
+        if (
+            isinstance(other_args.extract_output, str)
+            and "," in other_args.extract_output
+        ):
+            extract_output_key = {
+                "train": int(other_args.extract_output.split(",")[0]),
+                "validation": int(other_args.extract_output.split(",")[1]),
+                "test": int(other_args.extract_output.split(",")[2]),
+            }
+        else:
+            extract_output_key = {
+                "train": int(other_args.extract_output),
+                "validation": int(other_args.extract_output),
+                "test": int(other_args.extract_output),
+            }
+
+        def transform_mask_grand_null(example_batch):
+            """Add mask to example_batch"""
+            example_batch["masks"] = [
+                generate_mask(
+                    num_features=14 * 14,
+                    num_mask_samples=2,
+                    paired_mask_samples=True,
+                    mode="full",
+                    random_state=None,
+                )
+                for idx in range(len(example_batch["labels"]))
+            ]
+            return example_batch
+
+        def transform_mask(example_batch):
+            """Add mask to example_batch"""
+            if "mask_random_seed" in example_batch:
+                example_batch["masks"] = [
+                    generate_mask(
+                        num_features=14 * 14,
+                        num_mask_samples=other_args.num_mask_samples,
+                        paired_mask_samples=False,
+                        mode="shapley",
+                        random_state=np.random.RandomState(
+                            example_batch["mask_random_seed"][idx]
+                        ),
+                    )
+                    for idx in range(len(example_batch["labels"]))
+                ]
+            else:
+                example_batch["masks"] = [
+                    generate_mask(
+                        num_features=14 * 14,
+                        num_mask_samples=other_args.num_mask_samples,
+                        paired_mask_samples=False,
+                        mode="shapley",
+                        random_state=None,
+                    )
+                    for idx in range(len(example_batch["labels"]))
+                ]
+            return example_batch
+
+        # for dataset.keys()
+        import copy
+
+        dataset_extract = copy.deepcopy(dataset)
+        # dataset_extract = dataset.copy()
+        # for key in dataset_extract.keys():
+        save_dict = {}
+        for key in dataset_extract.keys():
+            dataset_extract[key].set_transform(
+                lambda x: transform_mask_grand_null(
+                    get_image_transform(surrogate_image_processor)["eval_transform"](x)
+                )
+            )
+            predict_output = surrogate_trainer.predict(dataset_extract[key])
+            assert all(
+                predict_output.label_ids
+                == dataset_extract[key].with_transform(lambda x: x)["labels"]
+            )
+            save_dict.setdefault(key + "_grand_null_logits", []).append(
+                predict_output.predictions[0]
+            )
+            save_dict.setdefault(key + "_grand_null_masks", []).append(
+                predict_output.predictions[1]
+            )
+            # continue
+
+            dataset_extract[key].set_transform(
+                lambda x: transform_mask(
+                    get_image_transform(surrogate_image_processor)["eval_transform"](x)
+                )
+            )
+            for idx in tqdm.tqdm(
+                range(
+                    (extract_output_key[key] + other_args.num_mask_samples - 1)
+                    // other_args.num_mask_samples
+                )
+            ):
+                predict_output = surrogate_trainer.predict(dataset_extract[key])
+                assert all(
+                    predict_output.label_ids
+                    == dataset_extract[key].with_transform(lambda x: x)["labels"]
+                )
+                save_dict.setdefault(key + "_logits", []).append(
+                    predict_output.predictions[0]
+                )
+                save_dict.setdefault(key + "_masks", []).append(
+                    predict_output.predictions[1]
+                )
+        ipdb.set_trace()
+        # save to file
+        # np.concatenate(save_dict["train_logits"])
+        torch.save(
+            save_dict, os.path.join(training_args.output_dir, "extract_output.pt")
+        )
+        # torch.save(dataset_extract, ("logs/extract_output.dataset.pt"))
+
+        # torch.save(save_dict, os.path.join(training_args.output_dir, "extract_output.pt"))
+        # torch.save(save_dict, os.path.join(training_args.output_dir, "extract_output.pt"))
+        # # save dataset_extract
+        # dataset_extract.save_to_disk(os.path.join(training_args.output_dir, "dataset_extract"))
 
     ########################################################
     # Training

@@ -14,6 +14,10 @@ ipython kernel install --name "xai-amortization" --user
 git config filter.strip-notebook-output.clean 'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --ClearMetadataPreprocessor.enabled=True --to=notebook --stdin --stdout --log-level=ERROR'
 ```
 
+
+## To-do
+* implement test split for classifier
+
 ## To-do
 
 * deterministic sampling

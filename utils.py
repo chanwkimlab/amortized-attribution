@@ -51,14 +51,13 @@ def generate_mask(
             np.arange(1, num_features) * (num_features - np.arange(1, num_features))
         )
         probs = probs / probs.sum()
-        masks = (
-            random_state.rand(num_samples_, num_features)
-            > 1
-            / num_features
-            * random_state.choice(
-                np.arange(num_features - 1), p=probs, size=[num_samples_, 1]
-            )
-        ).astype("int")
+        num_included = random_state.choice(
+            np.arange(1, num_features), size=num_samples_, p=probs, replace=True
+        )
+        tril = np.tril(np.ones((num_features - 1, num_features)), k=0)
+        masks = tril[num_included - 1].astype(int)
+        for i in range(num_samples_):
+            masks[i] = masks[i, random_state.permutation(num_features)]
     elif mode == "full":
         masks = np.ones((num_samples_, num_features)).astype("int")
     elif mode == "empty":

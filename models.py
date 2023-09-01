@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import ipdb
@@ -16,6 +17,36 @@ from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import ImageClassifierOutput, SemanticSegmenterOutput
 from transformers.models.vit.modeling_vit import ViTLayer
+from transformers.utils import ModelOutput
+
+
+@dataclass
+class ImageSurrogateOutput(ModelOutput):
+    """
+    Base class for outputs of image classification models.
+
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Classification (or regression if config.num_labels==1) loss.
+        logits (`torch.FloatTensor` of shape `(batch_size, config.num_labels)`):
+            Classification (or regression if config.num_labels==1) scores (before SoftMax).
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each stage) of shape `(batch_size, sequence_length, hidden_size)`. Hidden-states
+            (also called feature maps) of the model at the output of each stage.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, patch_size,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    masks: Optional[torch.FloatTensor] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
 class SurrogateForImageClassificationConfig(PretrainedConfig):
@@ -194,13 +225,14 @@ class SurrogateForImageClassification(PreTrainedModel):
                     f"Unknown problem type: {self.surrogate.config.problem_type}"
                 )
 
-        return ImageClassifierOutput(
+        return ImageSurrogateOutput(
             loss=loss,
             logits=surrogate_output.logits.reshape(
                 pixel_values.shape[0],
                 num_mask_samples,
                 *surrogate_output.logits.shape[1:],
             ),
+            masks=masks,
         )
 
 
@@ -482,6 +514,218 @@ class ExplainerForImageClassification(PreTrainedModel):
         return SemanticSegmenterOutput(
             loss=loss,
             logits=values_pred.transpose(
+                1, 2
+            ),  # (batch, num_players, num_classes) -> (batch, num_classes, num_players)
+        )
+
+
+class RegExplainerForImageClassificationConfig(PretrainedConfig):
+    def __init__(
+        self,
+        surrogate_pretrained_model_name_or_path=None,
+        surrogate_config=None,
+        surrogate_from_tf=False,
+        surrogate_cache_dir=None,
+        surrogate_revision=None,
+        surrogate_token=None,
+        surrogate_ignore_mismatched_sizes=None,
+        explainer_pretrained_model_name_or_path="google/vit-base-patch16-224",
+        explainer_config=None,
+        explainer_from_tf=False,
+        explainer_cache_dir=None,
+        explainer_revision=None,
+        explainer_token=None,
+        explainer_ignore_mismatched_sizes=None,
+        **kwargs,
+    ):
+        assert surrogate_pretrained_model_name_or_path is None or isinstance(
+            surrogate_pretrained_model_name_or_path, str
+        )
+        assert isinstance(explainer_pretrained_model_name_or_path, str)
+
+        self.surrogate_pretrained_model_name_or_path = (
+            surrogate_pretrained_model_name_or_path
+        )
+        self.surrogate_config = surrogate_config
+        self.surrogate_from_tf = surrogate_from_tf
+        self.surrogate_cache_dir = surrogate_cache_dir
+        self.surrogate_model_revision = surrogate_revision
+        self.surrogate_token = surrogate_token
+        self.surrogate_ignore_mismatched_sizes = surrogate_ignore_mismatched_sizes
+
+        self.explainer_pretrained_model_name_or_path = (
+            explainer_pretrained_model_name_or_path
+        )
+        self.explainer_config = explainer_config
+        self.explainer_from_tf = explainer_from_tf
+        self.explainer_cache_dir = explainer_cache_dir
+        self.explainer_model_revision = explainer_revision
+        self.explainer_token = explainer_token
+        self.explainer_ignore_mismatched_sizes = explainer_ignore_mismatched_sizes
+
+        super().__init__(**kwargs)
+
+
+# https://huggingface.co/docs/transformers/custom_models
+class RegExplainerForImageClassification(PreTrainedModel):
+    config_class = ExplainerForImageClassificationConfig
+    main_input_name = "pixel_values"
+
+    def __init__(
+        self,
+        config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
+    ):
+        super().__init__(config)
+        # import ipdb
+
+        # ipdb.set_trace()
+        if config.surrogate_pretrained_model_name_or_path is not None:
+            self.surrogate = SurrogateForImageClassification.from_pretrained(
+                pretrained_model_name_or_path=config.surrogate_pretrained_model_name_or_path,
+                from_tf=config.surrogate_from_tf,
+                cache_dir=config.surrogate_cache_dir,
+                revision=config.surrogate_model_revision,
+                token=config.surrogate_token,
+                ignore_mismatched_sizes=config.surrogate_ignore_mismatched_sizes,
+            )
+            self.surrogate.classifier = None
+
+            # freeze surrogate
+            for param in self.surrogate.parameters():
+                param.requires_grad = False
+        else:
+            self.surrogate = None
+
+        self.explainer = SurrogateForImageClassification.from_pretrained(
+            pretrained_model_name_or_path=config.explainer_pretrained_model_name_or_path,
+            from_tf=config.explainer_from_tf,
+            cache_dir=config.explainer_cache_dir,
+            revision=config.explainer_model_revision,
+            token=config.explainer_token,
+            ignore_mismatched_sizes=config.explainer_ignore_mismatched_sizes,
+        )
+        self.attention_blocks = nn.ModuleList(
+            [ViTLayer(config=self.explainer.surrogate.config)]
+        )
+        self.mlp_blocks = nn.Sequential(
+            *[
+                nn.LayerNorm(
+                    self.explainer.surrogate.config.hidden_size,
+                    eps=self.explainer.surrogate.config.layer_norm_eps,
+                ),
+                nn.Linear(
+                    in_features=self.explainer.surrogate.config.hidden_size,
+                    out_features=4 * self.explainer.surrogate.config.hidden_size,
+                ),
+                ACT2FN["gelu"],
+                nn.Linear(
+                    in_features=4 * self.explainer.surrogate.config.hidden_size,
+                    out_features=4 * self.explainer.surrogate.config.hidden_size,
+                ),
+                ACT2FN["gelu"],
+                nn.Linear(
+                    in_features=4 * self.explainer.surrogate.config.hidden_size,
+                    out_features=self.surrogate.surrogate.config.num_labels,
+                ),
+            ]
+        )
+
+        self.normalization = (
+            lambda pred, grand, null: pred
+            + ((grand - null) - torch.sum(pred, dim=1)).unsqueeze(1) / pred.shape[1]
+        )
+
+        self.link = nn.Softmax(dim=2)
+
+        assert (
+            self.explainer.surrogate.num_labels == self.surrogate.surrogate.num_labels
+        )
+
+    def grand(self, pixel_values):
+        self.surrogate.eval()
+        with torch.no_grad():
+            grand = self.link(
+                self.surrogate(
+                    pixel_values=pixel_values,
+                    # (batch, channel, height, weight)
+                    masks=torch.ones(
+                        (pixel_values.shape[0], 1, 196),
+                        device=pixel_values.device,
+                    ),
+                    return_loss=False,
+                    # (batch, num_players)
+                )["logits"]
+            )[
+                :, 0, :
+            ]  # (batch, num_classes)
+
+        return grand
+
+    def null(self, pixel_values):
+        if hasattr(self, "surrogate_null"):
+            return self.surrogate_null
+        else:
+            self.surrogate.eval()
+            with torch.no_grad():
+                self.surrogate_null = self.link(
+                    self.surrogate(
+                        pixel_values=pixel_values[0:1],
+                        masks=torch.zeros(
+                            (1, 1, 196),
+                            device=pixel_values.device,
+                        ),
+                        return_loss=False,
+                    )["logits"]
+                )[
+                    :, 0, :
+                ]  # (batch, channel, height, weight) -> (1, num_classes)
+            return self.surrogate_null
+
+    def forward(
+        self, pixel_values, shapley=None, labels=None, return_loss=True, **kwargs
+    ):
+        output = self.explainer.surrogate(
+            pixel_values=pixel_values, output_hidden_states=True
+        )
+        hidden_states = output["hidden_states"][-1]
+
+        # output = self.backbone(x=pixel_values)
+        # embedding_cls, embedding_tokens = output["x"], output["x_others"]
+
+        # if self.hparams.explainer_head_include_cls:
+        #     embedding_all = torch.cat(
+        #         [embedding_cls.unsqueeze(dim=1), embedding_tokens], dim=1
+        #     )
+        # else:
+        #     embedding_all = embedding_tokens
+
+        for _, attention_layer in enumerate(self.attention_blocks):
+            hidden_states = attention_layer(hidden_states=hidden_states)
+            hidden_states = hidden_states[0]  # (batch, 1+num_players, hidden_size)
+
+        # import ipdb
+
+        pred = self.mlp_blocks(
+            hidden_states[:, 1:, :]
+        ).tanh()  # (batch, num_players, num_classes)
+        # if self.hparams.explainer_head_include_cls:
+        #     pred = self.mlps(last_hidden_state)[:, 1:]
+        # else:
+        #     pred = self.mlps(last_hidden_state)
+
+        loss = None
+        # import ipdb
+
+        # ipdb.set_trace()
+        if return_loss:
+            value_diff = 196 * F.mse_loss(
+                input=pred, target=shapley.type(pred.dtype), reduction="mean"
+            )  # (batch, num_players, num_classes), (batch, num_players, num_classes)
+
+            loss = value_diff
+        return SemanticSegmenterOutput(
+            loss=loss,
+            logits=pred.transpose(
                 1, 2
             ),  # (batch, num_players, num_classes) -> (batch, num_classes, num_players)
         )

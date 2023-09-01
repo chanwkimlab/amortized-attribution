@@ -93,26 +93,14 @@ class DataTrainingArguments:
             "help": "The configuration name of the dataset to use (via the datasets library)."
         },
     )
-
-    dataset_cache_dir: Optional[str] = field(
-        default=None,
-        metadata={"help": "Where to store the downloaded dataset."},
-    )
     train_dir: Optional[str] = field(
         default=None, metadata={"help": "A folder containing the training data."}
     )
     validation_dir: Optional[str] = field(
         default=None, metadata={"help": "A folder containing the validation data."}
     )
-    test_dir: Optional[str] = field(
-        default=None, metadata={"help": "A folder containing the test data."}
-    )
-    train_validation_split: Optional[float] = field(
+    train_val_split: Optional[float] = field(
         default=0.15, metadata={"help": "Percent to split off of train for validation."}
-    )
-
-    validation_test_split: Optional[float] = field(
-        default=0.5, metadata={"help": "Percent to split off of val for test."}
     )
     max_train_samples: Optional[int] = field(
         default=None,
@@ -123,21 +111,11 @@ class DataTrainingArguments:
             )
         },
     )
-
-    max_val_samples: Optional[int] = field(
+    max_eval_samples: Optional[int] = field(
         default=None,
         metadata={
             "help": (
-                "For debugging purposes or quicker training, truncate the number of validation examples to this "
-                "value if set."
-            )
-        },
-    )
-    max_test_samples: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": (
-                "For debugging purposes or quicker training, truncate the number of test examples to this "
+                "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
                 "value if set."
             )
         },
@@ -361,7 +339,7 @@ def main():
             dataset = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
-                cache_dir=data_args.dataset_cache_dir,
+                cache_dir=explainer_args.explainer_cache_dir,
                 task=None,
                 token=other_args.token,
             )
@@ -374,7 +352,7 @@ def main():
             dataset = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
-                cache_dir=data_args.dataset_cache_dir,
+                cache_dir=explainer_args.explainer_cache_dir,
                 task="image-classification",
                 token=other_args.token,
             )
@@ -384,38 +362,21 @@ def main():
             data_files["train"] = os.path.join(data_args.train_dir, "**")
         if data_args.validation_dir is not None:
             data_files["validation"] = os.path.join(data_args.validation_dir, "**")
-        if data_args.test_dir is not None:
-            data_files["test"] = os.path.join(data_args.test_dir, "**")
         dataset = load_dataset(
             "imagefolder",
             data_files=data_files,
-            cache_dir=surrogate_args.surrogate_cache_dir,
+            cache_dir=explainer_args.explainer_cache_dir,
             task="image-classification",
         )
 
     # If we don't have a validation split, split off a percentage of train as validation.
-    data_args.train_validation_split = (
-        None if "validation" in dataset.keys() else data_args.train_validation_split
+    data_args.train_val_split = (
+        None if "validation" in dataset.keys() else data_args.train_val_split
     )
-    if (
-        isinstance(data_args.train_validation_split, float)
-        and data_args.train_validation_split > 0.0
-    ):
-        split = dataset["train"].train_test_split(data_args.train_validation_split)
+    if isinstance(data_args.train_val_split, float) and data_args.train_val_split > 0.0:
+        split = dataset["train"].train_test_split(data_args.train_val_split)
         dataset["train"] = split["train"]
         dataset["validation"] = split["test"]
-
-    data_args.validation_test_split = (
-        None if "test" in dataset.keys() else data_args.validation_test_split
-    )
-
-    if (
-        isinstance(data_args.validation_test_split, float)
-        and data_args.validation_test_split > 0.0
-    ):
-        split = dataset["validation"].train_test_split(data_args.validation_test_split)
-        dataset["validation"] = split["train"]
-        dataset["test"] = split["test"]
 
     # Prepare label mappings.
     # We'll include these in the model's config to get human readable labels in the Inference API.
@@ -494,32 +455,22 @@ def main():
     if training_args.do_train:
         if "train" not in dataset:
             raise ValueError("--do_train requires a train dataset")
-        if "validation" not in dataset:
-            raise ValueError("--do_train requires a validation dataset")
-
-    if data_args.max_train_samples is not None:
-        dataset["train"] = (
-            dataset["train"]
-            .shuffle(seed=training_args.seed)
-            .select(range(data_args.max_train_samples))
-        )
-    if data_args.max_val_samples is not None:
-        dataset["validation"] = (
-            dataset["validation"]
-            .shuffle(seed=training_args.seed)
-            .select(range(data_args.max_val_samples))
-        )
+        if data_args.max_train_samples is not None:
+            dataset["train"] = (
+                dataset["train"]
+                .shuffle(seed=training_args.seed)
+                .select(range(data_args.max_train_samples))
+            )
 
     if training_args.do_eval:
-        if "test" not in dataset:
-            raise ValueError("--do_eval requires a test dataset")
-
-    if data_args.max_test_samples is not None:
-        dataset["test"] = (
-            dataset["test"]
-            .shuffle(seed=training_args.seed)
-            .select(range(data_args.max_test_samples))
-        )
+        if "validation" not in dataset:
+            raise ValueError("--do_eval requires a validation dataset")
+        if data_args.max_eval_samples is not None:
+            dataset["validation"] = (
+                dataset["validation"]
+                .shuffle(seed=training_args.seed)
+                .select(range(data_args.max_eval_samples))
+            )
 
     ########################################################
     # Add random generator
@@ -537,11 +488,6 @@ def main():
         ),
     )
 
-    loaded = torch.load(
-        "logs/vitbase_imagenette_surrogate_eval/extract_output_all.pt",
-        map_location="cpu",
-    )
-
     def tranform_mask(example_batch):
         """Add mask to example_batch"""
 
@@ -552,6 +498,7 @@ def main():
             mode="full",
             random_state=None,
         )
+
         if "mask_random_seed" in example_batch:
             example_batch["masks"] = [
                 np.vstack(
@@ -597,9 +544,6 @@ def main():
             get_image_transform(explainer_image_processor)["eval_transform"](x)
         )
     )
-    # import ipdb
-
-    # ipdb.set_trace()
 
     ########################################################
     # Initalize the explainer trainer

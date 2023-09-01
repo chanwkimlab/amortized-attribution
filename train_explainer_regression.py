@@ -43,8 +43,8 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 from models import (
-    ExplainerForImageClassification,
-    ExplainerForImageClassificationConfig,
+    RegExplainerForImageClassification,
+    RegExplainerForImageClassificationConfig,
     SurrogateForImageClassificationConfig,
 )
 from utils import generate_mask, get_image_transform
@@ -167,6 +167,14 @@ class OtherArguments:
             "help": (
                 "The token to use as HTTP bearer authorization for remote files. If not specified, will use the token "
                 "generated when running `huggingface-cli login` (stored in `~/.huggingface`)."
+            )
+        },
+    )
+    shapley_index: int = field(
+        default=None,
+        metadata={
+            "help": (
+                "The index of the shapley value to use for the mask. Default is 1536."
             )
         },
     )
@@ -459,7 +467,7 @@ def main():
         revision=explainer_args.explainer_model_revision,
         token=other_args.token,
     )
-    explainer_for_image_classification_config = ExplainerForImageClassificationConfig(
+    explainer_for_image_classification_config = RegExplainerForImageClassificationConfig(
         surrogate_pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
         surrogate_config=surrogate_for_image_classification_config,
         surrogate_from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
@@ -476,7 +484,7 @@ def main():
         explainer_ignore_mismatched_sizes=explainer_args.explainer_ignore_mismatched_sizes,
     )
 
-    explainer = ExplainerForImageClassification(
+    explainer = RegExplainerForImageClassification(
         config=explainer_for_image_classification_config,
     )
     explainer_image_processor = AutoImageProcessor.from_pretrained(
@@ -537,9 +545,24 @@ def main():
         ),
     )
 
-    loaded = torch.load(
-        "logs/vitbase_imagenette_surrogate_eval/extract_output_all.pt",
+    shapley_values = torch.load(
+        "logs/vitbase_imagenette_surrogate_eval/shapley_train_val.pt",
         map_location="cpu",
+    )
+
+    dataset["train_explainer"] = dataset["train_explainer"].add_column(
+        "shapley",
+        [
+            shapley_values["train"][i][other_args.shapley_index].flatten()
+            for i in range(len(dataset["train_explainer"]))
+        ],
+    )
+    dataset["validation_explainer"] = dataset["validation_explainer"].add_column(
+        "shapley",
+        [
+            shapley_values["validation"][i][other_args.shapley_index].flatten()
+            for i in range(len(dataset["validation_explainer"]))
+        ],
     )
 
     def tranform_mask(example_batch):
@@ -559,7 +582,7 @@ def main():
                         generate_mask(
                             num_features=14 * 14,
                             num_mask_samples=32,
-                            paired_mask_samples=True,
+                            paired_mask_samples=False,
                             mode="shapley",
                             random_state=np.random.RandomState(
                                 example_batch["mask_random_seed"][idx]
@@ -576,7 +599,7 @@ def main():
                         generate_mask(
                             num_features=14 * 14,
                             num_mask_samples=32,
-                            paired_mask_samples=True,
+                            paired_mask_samples=False,
                             mode="shapley",
                             random_state=None,
                         ),
@@ -584,6 +607,15 @@ def main():
                 )
                 for idx in range(len(example_batch["labels"]))
             ]
+        return example_batch
+
+    def tranform_mask(example_batch):
+        # print(np.array(example_batch["shapley"][0]).shape)
+        example_batch["shapley"] = [
+            np.array(example_batch["shapley"][idx]).reshape((196, 10))
+            for idx in range(len(example_batch["labels"]))
+        ]
+        # print(example_batch.keys())
         return example_batch
 
     dataset["train_explainer"].set_transform(
@@ -624,12 +656,12 @@ def main():
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
         labels = torch.tensor([example["labels"] for example in examples])
-        masks = torch.tensor(np.array([example["masks"] for example in examples]))
+        shapley = torch.tensor([example["shapley"] for example in examples])
 
         return {
             "pixel_values": pixel_values,
             "labels": labels,
-            "masks": masks,
+            "shapley": shapley,
         }
 
     explainer_trainer = Trainer(

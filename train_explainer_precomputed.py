@@ -552,6 +552,18 @@ def main():
             mode="full",
             random_state=None,
         )
+        if "masks_select" in example_batch:
+            example_batch["masks"] = [
+                example_batch["masks_select"][i].reshape(-1, 196)
+                for idx in range(len(example_batch["labels"]))
+            ]
+            example_batch["logits"] = [
+                example_batch["logits_select"][i].reshape(-1, 10)
+                for idx in range(len(example_batch["labels"]))
+            ]
+            return example_batch
+        else:
+            raise RuntimeError("No mask in example_batch")
         if "mask_random_seed" in example_batch:
             example_batch["masks"] = [
                 np.vstack(
@@ -632,15 +644,44 @@ def main():
             "masks": masks,
         }
 
-    explainer_trainer = Trainer(
-        model=explainer,
-        args=training_args,
-        train_dataset=dataset["train_explainer"] if training_args.do_train else None,
-        eval_dataset=dataset["validation_explainer"] if training_args.do_eval else None,
-        compute_metrics=compute_metrics,
-        tokenizer=explainer_image_processor,
-        data_collator=collate_fn,
-    )
+    from transformers import TrainerCallback
+
+    class AlwaysStopCallback(TrainerCallback):
+        "A callback that prints a message at the beginning of training"
+
+        def on_epoch_end(self, args, state, control, **kwargs):
+            control.should_training_stop = True
+
+    for i in range(100):
+        dataset["train_explainer"] = dataset["train_explainer"].add_column(
+            "logits_select",
+            [i[16 * i : 16 * (i + 1)].flatten() for i in loaded["train_logits"]],
+        )
+        dataset["train_explainer"] = dataset["train_explainer"].add_column(
+            "masks_select", [i.flatten() for i in loaded["train_masks"]]
+        )
+
+        dataset["validation_explainer"] = dataset["validation_explainer"].add_column(
+            "logits_select", [i.flatten() for i in loaded["validation_logits"]]
+        )
+        dataset["validation_explainer"] = dataset["validation_explainer"].add_column(
+            "masks_select", [i.flatten() for i in loaded["validation_masks"]]
+        )
+
+        explainer_trainer = Trainer(
+            model=explainer,
+            args=training_args,
+            train_dataset=dataset["train_explainer"]
+            if training_args.do_train
+            else None,
+            eval_dataset=dataset["validation_explainer"]
+            if training_args.do_eval
+            else None,
+            compute_metrics=compute_metrics,
+            tokenizer=explainer_image_processor,
+            data_collator=collate_fn,
+            callbacks=[AlwaysStopCallback],
+        )
 
     # ipdb.set_trace()
     # print("explainer_trainer.label_names", explainer_trainer.label_names)

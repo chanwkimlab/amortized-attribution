@@ -537,10 +537,10 @@ def main():
         ),
     )
 
-    loaded = torch.load(
-        "logs/vitbase_imagenette_surrogate_eval/extract_output_all.pt",
-        map_location="cpu",
-    )
+    # loaded = torch.load(
+    #     "logs/vitbase_imagenette_surrogate_eval/extract_output_all.pt",
+    #     map_location="cpu",
+    # )
 
     def tranform_mask(example_batch):
         """Add mask to example_batch"""
@@ -559,7 +559,7 @@ def main():
                         generate_mask(
                             num_features=14 * 14,
                             num_mask_samples=32,
-                            paired_mask_samples=True,
+                            paired_mask_samples=False,
                             mode="shapley",
                             random_state=np.random.RandomState(
                                 example_batch["mask_random_seed"][idx]
@@ -576,7 +576,7 @@ def main():
                         generate_mask(
                             num_features=14 * 14,
                             num_mask_samples=32,
-                            paired_mask_samples=True,
+                            paired_mask_samples=False,
                             mode="shapley",
                             random_state=None,
                         ),
