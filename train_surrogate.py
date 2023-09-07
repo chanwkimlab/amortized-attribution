@@ -12,6 +12,7 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
+import copy
 import json
 import logging
 import os
@@ -24,12 +25,12 @@ import evaluate
 import ipdb
 import numpy as np
 import torch
-import tqdm
 import transformers
 from datasets import load_dataset
-from PIL import Image
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.nn import functional as F
+
+# import tqdm
+from tqdm.auto import tqdm
 from transformers import (
     MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
     AutoConfig,
@@ -44,11 +45,20 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from arguments import ClassifierArguments, DataTrainingArguments, SurrogateArguments
 from models import (
     SurrogateForImageClassification,
     SurrogateForImageClassificationConfig,
 )
-from utils import generate_mask, get_image_transform
+from utils import (
+    MaskDataset,
+    configure_dataset,
+    generate_mask,
+    get_checkpoint,
+    get_image_transform,
+    log_dataset,
+    setup_dataset,
+)
 
 """ Fine-tuning a 🤗 Transformers model for image classification"""
 
@@ -64,96 +74,6 @@ require_version(
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-print(MODEL_CONFIG_CLASSES)
-print(MODEL_TYPES)
-
-
-def pil_loader(path: str):
-    with open(path, "rb") as f:
-        im = Image.open(f)
-        return im.convert("RGB")
-
-
-@dataclass
-class DataTrainingArguments:
-    """
-    Arguments pertaining to what data we are going to input our model for training and eval.
-    Using `HfArgumentParser` we can turn this class into argparse arguments to be able to specify
-    them on the command line.
-    """
-
-    dataset_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Name of a dataset from the hub (could be your own, possibly private dataset hosted on the hub)."
-        },
-    )
-    dataset_config_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "The configuration name of the dataset to use (via the datasets library)."
-        },
-    )
-
-    dataset_cache_dir: Optional[str] = field(
-        default=None,
-        metadata={"help": "Where to store the downloaded dataset."},
-    )
-
-    train_dir: Optional[str] = field(
-        default=None, metadata={"help": "A folder containing the training data."}
-    )
-    validation_dir: Optional[str] = field(
-        default=None, metadata={"help": "A folder containing the validation data."}
-    )
-
-    test_dir: Optional[str] = field(
-        default=None, metadata={"help": "A folder containing the test data."}
-    )
-
-    train_validation_split: Optional[float] = field(
-        default=0.15, metadata={"help": "Percent to split off of train for validation."}
-    )
-
-    validation_test_split: Optional[float] = field(
-        default=0.5, metadata={"help": "Percent to split off of val for test."}
-    )
-
-    max_train_samples: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": (
-                "For debugging purposes or quicker training, truncate the number of training examples to this "
-                "value if set."
-            )
-        },
-    )
-    max_val_samples: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": (
-                "For debugging purposes or quicker training, truncate the number of validation examples to this "
-                "value if set."
-            )
-        },
-    )
-    max_test_samples: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": (
-                "For debugging purposes or quicker training, truncate the number of test examples to this "
-                "value if set."
-            )
-        },
-    )
-
-    def __post_init__(self):
-        if self.dataset_name is None and (
-            self.train_dir is None and self.validation_dir is None
-        ):
-            raise ValueError(
-                "You must specify either a dataset name from the hub or a train and/or validation directory."
-            )
 
 
 @dataclass
@@ -170,13 +90,6 @@ class OtherArguments:
         metadata={"help": "Number of masks to use for extracting output."},
     )
 
-    use_auth_token: bool = field(
-        default=None,
-        metadata={
-            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token`."
-        },
-    )
-
     token: str = field(
         default=None,
         metadata={
@@ -184,105 +97,6 @@ class OtherArguments:
                 "The token to use as HTTP bearer authorization for remote files. If not specified, will use the token "
                 "generated when running `huggingface-cli login` (stored in `~/.huggingface`)."
             )
-        },
-    )
-
-
-@dataclass
-class ClassifierArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
-    """
-
-    classifier_model_name_or_path: str = field(
-        default="google/vit-base-patch16-224-in21k",
-        metadata={
-            "help": "Path to pretrained model or model identifier from huggingface.co/models"
-        },
-    )
-    classifier_model_type: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "If training from scratch, pass a model type from the list: "
-            + ", ".join(MODEL_TYPES)
-        },
-    )
-
-    classifier_config_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Pretrained config name or path if not the same as model_name"
-        },
-    )
-    classifier_cache_dir: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Where do you want to store the pretrained models downloaded from s3"
-        },
-    )
-    classifier_model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
-        },
-    )
-    classifier_image_processor_name: str = field(
-        default=None, metadata={"help": "Name or path of preprocessor config."}
-    )
-
-    classifier_ignore_mismatched_sizes: bool = field(
-        default=False,
-        metadata={
-            "help": "Will enable to load a pretrained model whose head dimensions are different."
-        },
-    )
-
-
-@dataclass
-class SurrogateArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
-    """
-
-    surrogate_model_name_or_path: str = field(
-        default="google/vit-base-patch16-224-in21k",
-        metadata={
-            "help": "Path to pretrained model or model identifier from huggingface.co/models"
-        },
-    )
-    surrogate_model_type: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "If training from scratch, pass a model type from the list: "
-            + ", ".join(MODEL_TYPES)
-        },
-    )
-
-    surrogate_config_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Pretrained config name or path if not the same as model_name"
-        },
-    )
-    surrogate_cache_dir: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Where do you want to store the pretrained models downloaded from s3"
-        },
-    )
-    surrogate_model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
-        },
-    )
-    surrogate_image_processor_name: str = field(
-        default=None, metadata={"help": "Name or path of preprocessor config."}
-    )
-    surrogate_ignore_mismatched_sizes: bool = field(
-        default=False,
-        metadata={
-            "help": "Will enable to load a pretrained model whose head dimensions are different."
         },
     )
 
@@ -323,21 +137,6 @@ def main():
             other_args,
         ) = parser.parse_args_into_dataclasses()
 
-    if other_args.use_auth_token is not None:
-        warnings.warn(
-            "The `use_auth_token` argument is deprecated and will be removed in v4.34.",
-            FutureWarning,
-        )
-        if other_args.token is not None:
-            raise ValueError(
-                "`token` and `use_auth_token` are both specified. Please set only the argument `token`."
-            )
-        other_args.token = other_args.use_auth_token
-
-    # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
-    # information sent is the one passed as arguments along with your Python/PyTorch versions.
-    send_example_telemetry("run_image_classification", surrogate_args, data_args)
-
     ########################################################
     # Setup logging
     #######################################################
@@ -365,6 +164,31 @@ def main():
     logger.info(f"Training/evaluation parameters {training_args}")
 
     ########################################################
+    # Correct cache dir if necessary
+    ########################################################
+    if not os.path.exists(
+        os.sep.join((data_args.dataset_cache_dir).split(os.sep, 2)[:2])
+    ):
+        if os.path.exists("/data2"):
+            data_args.dataset_cache_dir = os.sep.join(
+                ["/data2"] + (data_args.dataset_cache_dir).split(os.sep, 2)[2:]
+            )
+            logger.info(
+                f"dataset_cache_dir {data_args.dataset_cache_dir} not found, using {data_args.dataset_cache_dir}"
+            )
+        elif os.path.exists("/sdata"):
+            data_args.dataset_cache_dir = os.sep.join(
+                ["/sdata"] + (data_args.dataset_cache_dir).split(os.sep, 2)[2:]
+            )
+            logger.info(
+                f"dataset_cache_dir {data_args.dataset_cache_dir} not found, using {data_args.dataset_cache_dir}"
+            )
+        else:
+            raise ValueError(
+                f"dataset_cache_dir {data_args.dataset_cache_dir} not found"
+            )
+
+    ########################################################
     # Set seed before initializing model.
     ########################################################
     set_seed(training_args.seed)
@@ -372,74 +196,9 @@ def main():
     ########################################################
     # Initialize our dataset and prepare it for the 'image-classification' task.
     ########################################################
-    if data_args.dataset_name is not None:
-        if data_args.dataset_name == "frgfm/imagenette":
-            dataset = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                cache_dir=data_args.dataset_cache_dir,
-                task=None,
-                token=other_args.token,
-            )
-
-            for split in dataset.keys():
-                if "label" in dataset[split].features:
-                    dataset[split] = dataset[split].rename_column("label", "labels")
-
-        else:
-            dataset = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                cache_dir=data_args.dataset_cache_dir,
-                task="image-classification",
-                token=other_args.token,
-            )
-    else:
-        data_files = {}
-        if data_args.train_dir is not None:
-            data_files["train"] = os.path.join(data_args.train_dir, "**")
-        if data_args.validation_dir is not None:
-            data_files["validation"] = os.path.join(data_args.validation_dir, "**")
-        if data_args.test_dir is not None:
-            data_files["test"] = os.path.join(data_args.test_dir, "**")
-        dataset = load_dataset(
-            "imagefolder",
-            data_files=data_files,
-            cache_dir=surrogate_args.surrogate_cache_dir,
-            task="image-classification",
-        )
-
-    # If we don't have a validation split, split off a percentage of train as validation.
-    data_args.train_validation_split = (
-        None if "validation" in dataset.keys() else data_args.train_validation_split
+    dataset_original, labels, label2id, id2label = setup_dataset(
+        data_args=data_args, other_args=other_args
     )
-    if (
-        isinstance(data_args.train_validation_split, float)
-        and data_args.train_validation_split > 0.0
-    ):
-        split = dataset["train"].train_test_split(data_args.train_validation_split)
-        dataset["train"] = split["train"]
-        dataset["validation"] = split["test"]
-
-    data_args.validation_test_split = (
-        None if "test" in dataset.keys() else data_args.validation_test_split
-    )
-
-    if (
-        isinstance(data_args.validation_test_split, float)
-        and data_args.validation_test_split > 0.0
-    ):
-        split = dataset["validation"].train_test_split(data_args.validation_test_split)
-        dataset["validation"] = split["train"]
-        dataset["test"] = split["test"]
-
-    # Prepare label mappings.
-    # We'll include these in the model's config to get human readable labels in the Inference API.
-    labels = dataset["train"].features["labels"].names
-    label2id, id2label = {}, {}
-    for i, label in enumerate(labels):
-        label2id[label] = str(i)
-        id2label[str(i)] = label
 
     ########################################################
     # Initialize classifier model
@@ -451,22 +210,6 @@ def main():
         label2id=label2id,
         id2label=id2label,
         finetuning_task="image-classification",
-        cache_dir=classifier_args.classifier_cache_dir,
-        revision=classifier_args.classifier_model_revision,
-        token=other_args.token,
-    )
-    classifier = AutoModelForImageClassification.from_pretrained(
-        classifier_args.classifier_model_name_or_path,
-        from_tf=bool(".ckpt" in classifier_args.classifier_model_name_or_path),
-        config=classifier_config,
-        cache_dir=classifier_args.classifier_cache_dir,
-        revision=classifier_args.classifier_model_revision,
-        token=other_args.token,
-        ignore_mismatched_sizes=classifier_args.classifier_ignore_mismatched_sizes,
-    )
-    classifier_image_processor = AutoImageProcessor.from_pretrained(
-        classifier_args.classifier_image_processor_name
-        or classifier_args.classifier_model_name_or_path,
         cache_dir=classifier_args.classifier_cache_dir,
         revision=classifier_args.classifier_model_revision,
         token=other_args.token,
@@ -539,139 +282,59 @@ def main():
     )
 
     ########################################################
-    # Align dataset to model settings
+    # Configure dataset (set max samples, transforms, etc.)
     ########################################################
+    dataset_surrogate = copy.deepcopy(dataset_original)
+    dataset_surrogate = configure_dataset(
+        dataset=dataset_surrogate,
+        image_processor=surrogate_image_processor,
+        training_args=training_args,
+        data_args=data_args,
+        train_augmentation=True,
+        validation_augmentation=False,
+        test_augmentation=False,
+        logger=logger,
+    )
 
-    if training_args.do_train:
-        if "train" not in dataset:
-            raise ValueError("--do_train requires a train dataset")
-        if "validation" not in dataset:
-            raise ValueError("--do_train requires a validation dataset")
-
-    if data_args.max_train_samples is not None:
-        dataset["train"] = (
-            dataset["train"]
-            .shuffle(seed=training_args.seed)
-            .select(range(data_args.max_train_samples))
-        )
-    if data_args.max_val_samples is not None:
-        dataset["validation"] = (
-            dataset["validation"]
-            .shuffle(seed=training_args.seed)
-            .select(range(data_args.max_val_samples))
-        )
-
-    if training_args.do_eval:
-        if "test" not in dataset:
-            raise ValueError("--do_eval requires a test dataset")
-
-    if data_args.max_test_samples is not None:
-        dataset["test"] = (
-            dataset["test"]
-            .shuffle(seed=training_args.seed)
-            .select(range(data_args.max_test_samples))
-        )
-
-    ########################################################
-    # Align dataset to model settings
-    ########################################################
-    # Set the training transforms
-    # if training_args.do_train:
-    #     dataset["train_classifier"] = dataset["train"]
-    #     dataset["train_classifier"].set_transform(
-    #         get_image_transform(classifier_image_processor)["train_transform"]
-    #     )
-    #     dataset["validation_classifier"] = dataset["validation"]
-    #     dataset["validation_classifier"].set_transform(
-    #         get_image_transform(classifier_image_processor)["eval_transform"]
-    #     )
-
-    # # Set the validation transforms
-    # if training_args.do_eval:
-    #     dataset["test_classifier"] = dataset["test"]
-    #     dataset["test_classifier"].set_transform(
-    #         get_image_transform(classifier_image_processor)["eval_transform"]
-    #     )
-
-    ########################################################
-    # Evaluate the original model
-    ########################################################
-
-    # def collate_fn(examples):
-    #     pixel_values = torch.stack([example["pixel_values"] for example in examples])
-    #     labels = torch.tensor([example["labels"] for example in examples])
-    #     return {"pixel_values": pixel_values, "labels": labels}
-
-    # classifier_trainer = Trainer(
-    #     model=classifier,
-    #     args=training_args,
-    #     train_dataset=None,
-    #     eval_dataset=None,
-    #     compute_metrics=None,
-    #     tokenizer=classifier_image_processor,
-    #     data_collator=collate_fn,
-    # )
-    # print("classifier_trainer.label_names", classifier_trainer.label_names)
-    # print(classifier_trainer.evaluate(dataset["validation_classifier"]))
-    ########################################################
-    # Add random generator
-    ########################################################
-
-    def transform_mask(example_batch):
-        """Add mask to example_batch"""
-        if "mask_random_seed" in example_batch:
-            example_batch["masks"] = [
-                generate_mask(
-                    num_features=14 * 14,
-                    num_mask_samples=other_args.num_mask_samples,
-                    paired_mask_samples=False,
-                    mode="uniform",
-                    random_state=np.random.RandomState(
-                        example_batch["mask_random_seed"][idx]
-                    ),
-                )
-                for idx in range(len(example_batch["labels"]))
-            ]
-        else:
-            example_batch["masks"] = [
-                generate_mask(
-                    num_features=14 * 14,
-                    num_mask_samples=other_args.num_mask_samples,
-                    paired_mask_samples=False,
-                    mode="uniform",
-                    random_state=None,
-                )
-                for idx in range(len(example_batch["labels"]))
-            ]
-        return example_batch
-
-    dataset_surrogate = dataset.copy()
-    dataset_surrogate["validation"] = dataset_surrogate["validation"].add_column(
-        "mask_random_seed",
-        iter(
-            np.random.RandomState(training_args.seed).randint(
-                0,
-                len(dataset_surrogate["validation"]),
-                size=len(dataset_surrogate["validation"]),
+    for dataset_key in dataset_surrogate.keys():
+        if dataset_key == "train":
+            dataset_surrogate[dataset_key] = MaskDataset(
+                dataset_surrogate[dataset_key],
+                num_features=196,
+                num_mask_samples=1,
+                paired_mask_samples=False,
+                mode="uniform",
+                random_seed=None,
             )
-        ),
-    )
+        elif dataset_key == "validation":
+            dataset_surrogate[dataset_key] = MaskDataset(
+                dataset_surrogate[dataset_key],
+                num_features=196,
+                num_mask_samples=1,
+                paired_mask_samples=False,
+                mode="uniform",
+                random_seed=training_args.seed,
+            )
+        elif dataset_key == "test":
+            dataset_surrogate[dataset_key] = MaskDataset(
+                dataset_surrogate[dataset_key],
+                num_features=196,
+                num_mask_samples=1,
+                paired_mask_samples=False,
+                mode="uniform",
+                random_seed=training_args.seed,
+            )
+        else:
+            raise ValueError(
+                f"Dataset key {dataset_key} not recognized. Choose from ['train', 'validation', 'test']"
+            )
 
-    dataset_surrogate["train"].set_transform(
-        lambda x: transform_mask(
-            get_image_transform(surrogate_image_processor)["train_transform"](x)
-        )
-    )
-
-    dataset_surrogate["validation"].set_transform(
-        lambda x: transform_mask(
-            get_image_transform(surrogate_image_processor)["eval_transform"](x)
-        )
-    )
+    log_dataset(dataset=dataset_surrogate, logger=logger)
 
     ########################################################
     # Initalize the surrogate trainer
     ########################################################
+
     # Load the accuracy metric from the datasets package
     metric = evaluate.load("accuracy")
 
@@ -679,11 +342,6 @@ def main():
     # predictions and label_ids field) and has to return a dictionary string to float.
     def compute_metrics(p):
         """Computes accuracy on a batch of predictions"""
-        # import ipdb
-
-        # ipdb.set_trace()
-        # print(p.predictions.shape, p.label_ids.shape)
-        # print(p)
         return metric.compute(
             predictions=np.argmax(p.predictions[0][:, 0, :], axis=1),
             references=p.label_ids,
@@ -704,38 +362,13 @@ def main():
         model=surrogate,
         args=training_args,
         train_dataset=dataset_surrogate["train"] if training_args.do_train else None,
-        eval_dataset=dataset_surrogate["validation"] if training_args.do_eval else None,
+        eval_dataset=dataset_surrogate["validation"]
+        if training_args.do_train
+        else None,
         compute_metrics=compute_metrics,
         tokenizer=surrogate_image_processor,
         data_collator=collate_fn,
     )
-
-    # ipdb.set_trace()
-    # print("surrogate_trainer.label_names", surrogate_trainer.label_names)
-    # print(surrogate_trainer.evaluate(dataset["validation_surrogate"]))
-
-    ########################################################
-    # Detecting last checkpoint
-    #######################################################
-    last_checkpoint = None
-    if (
-        os.path.isdir(training_args.output_dir)
-        and training_args.do_train
-        and not training_args.overwrite_output_dir
-    ):
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif (
-            last_checkpoint is not None and training_args.resume_from_checkpoint is None
-        ):
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
 
     if other_args.extract_output:
         if (
@@ -754,102 +387,101 @@ def main():
                 "test": int(other_args.extract_output),
             }
 
-        def transform_mask_grand_null(example_batch):
-            """Add mask to example_batch"""
-            example_batch["masks"] = [
-                generate_mask(
-                    num_features=14 * 14,
-                    num_mask_samples=2,
-                    paired_mask_samples=True,
-                    mode="full",
-                    random_state=None,
-                )
-                for idx in range(len(example_batch["labels"]))
-            ]
-            return example_batch
+        dataset_extract = copy.deepcopy(dataset_original)
+        dataset_extract = configure_dataset(
+            dataset=dataset_extract,
+            image_processor=surrogate_image_processor,
+            training_args=training_args,
+            data_args=data_args,
+            train_augmentation=False,
+            validation_augmentation=False,
+            test_augmentation=False,
+            logger=logger,
+        )
 
-        def transform_mask(example_batch):
-            """Add mask to example_batch"""
-            if "mask_random_seed" in example_batch:
-                example_batch["masks"] = [
-                    generate_mask(
-                        num_features=14 * 14,
-                        num_mask_samples=other_args.num_mask_samples,
-                        paired_mask_samples=False,
-                        mode="shapley",
-                        random_state=np.random.RandomState(
-                            example_batch["mask_random_seed"][idx]
-                        ),
-                    )
-                    for idx in range(len(example_batch["labels"]))
-                ]
-            else:
-                example_batch["masks"] = [
-                    generate_mask(
-                        num_features=14 * 14,
-                        num_mask_samples=other_args.num_mask_samples,
-                        paired_mask_samples=False,
-                        mode="shapley",
-                        random_state=None,
-                    )
-                    for idx in range(len(example_batch["labels"]))
-                ]
-            return example_batch
-
-        # for dataset.keys()
-        import copy
-
-        dataset_extract = copy.deepcopy(dataset)
-        # dataset_extract = dataset.copy()
-        # for key in dataset_extract.keys():
+        # save grand null
+        logger.info("Calculating grand null output of the surrogate model")
         save_dict = {}
-        for key in dataset_extract.keys():
-            dataset_extract[key].set_transform(
-                lambda x: transform_mask_grand_null(
-                    get_image_transform(surrogate_image_processor)["eval_transform"](x)
-                )
+        for dataset_key in dataset_extract.keys():
+            dataset_extract[dataset_key] = MaskDataset(
+                dataset_extract[dataset_key],
+                num_features=196,
+                num_mask_samples=2,
+                paired_mask_samples=True,
+                mode="full",
+                random_seed=None,
             )
-            predict_output = surrogate_trainer.predict(dataset_extract[key])
-            assert all(
-                predict_output.label_ids
-                == dataset_extract[key].with_transform(lambda x: x)["labels"]
-            )
-            save_dict.setdefault(key + "_grand_null_logits", []).append(
-                predict_output.predictions[0]
-            )
-            save_dict.setdefault(key + "_grand_null_masks", []).append(
-                predict_output.predictions[1]
-            )
-            # continue
 
-            dataset_extract[key].set_transform(
-                lambda x: transform_mask(
-                    get_image_transform(surrogate_image_processor)["eval_transform"](x)
+        log_dataset(dataset=dataset_extract, logger=logger)
+        for dataset_key in dataset_extract.keys():
+            if extract_output_key[dataset_key] == 0:
+                continue
+            predict_output = surrogate_trainer.predict(dataset_extract[dataset_key])
+            logger.info("Saving grand null output of the surrogate model")
+            for sample_idx in tqdm(range(len(predict_output.predictions[0]))):
+                save_path = os.path.join(
+                    training_args.output_dir,
+                    "extract_output",
+                    dataset_key,
+                    str(sample_idx),
+                    "grand_null.pt",
                 )
+                # make dir
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                torch.save(
+                    {
+                        "logits": predict_output.predictions[0][sample_idx],
+                        "masks": predict_output.predictions[1][sample_idx],
+                    },
+                    save_path,
+                )
+        # save mask evaluation results
+        logger.info("Calculating mask evaluation results")
+        for dataset_key in dataset_extract.keys():
+            dataset_extract[dataset_key].set_params(
+                num_features=196,
+                num_mask_samples=other_args.num_mask_samples,
+                paired_mask_samples=False,
+                mode="shapley",
+                random_seed=training_args.seed,
             )
-            for idx in tqdm.tqdm(
+        log_dataset(dataset=dataset_extract, logger=logger)
+        for dataset_key in dataset_extract.keys():
+            # continue
+            for idx in tqdm(
                 range(
-                    (extract_output_key[key] + other_args.num_mask_samples - 1)
+                    (extract_output_key[dataset_key] + other_args.num_mask_samples - 1)
                     // other_args.num_mask_samples
                 )
             ):
-                predict_output = surrogate_trainer.predict(dataset_extract[key])
-                assert all(
-                    predict_output.label_ids
-                    == dataset_extract[key].with_transform(lambda x: x)["labels"]
+                dataset_extract[dataset_key].set_params(
+                    num_features=196,
+                    num_mask_samples=other_args.num_mask_samples,
+                    paired_mask_samples=False,
+                    mode="shapley",
+                    random_seed=training_args.seed + idx,
                 )
-                save_dict.setdefault(key + "_logits", []).append(
-                    predict_output.predictions[0]
-                )
-                save_dict.setdefault(key + "_masks", []).append(
-                    predict_output.predictions[1]
-                )
-        ipdb.set_trace()
-        # save to file
-        # np.concatenate(save_dict["train_logits"])
-        torch.save(
-            save_dict, os.path.join(training_args.output_dir, "extract_output.pt")
-        )
+
+                predict_output = surrogate_trainer.predict(dataset_extract[dataset_key])
+                logger.info("Saving mask evaluation results")
+                for sample_idx in tqdm(range(len(predict_output.predictions[0]))):
+                    save_path = os.path.join(
+                        training_args.output_dir,
+                        "extract_output",
+                        dataset_key,
+                        str(sample_idx),
+                        f"mask_eval_{idx*other_args.num_mask_samples}_{(idx+1)*other_args.num_mask_samples}.pt",
+                    )
+                    # make dir
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    torch.save(
+                        {
+                            "logits": predict_output.predictions[0][sample_idx],
+                            "masks": predict_output.predictions[1][sample_idx],
+                        },
+                        save_path,
+                    )
+
         # torch.save(dataset_extract, ("logs/extract_output.dataset.pt"))
 
         # torch.save(save_dict, os.path.join(training_args.output_dir, "extract_output.pt"))
@@ -861,11 +493,8 @@ def main():
     # Training
     #######################################################
     if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
+        print("train loop")
+        checkpoint = get_checkpoint(training_args=training_args, logger=logger)
         train_result = surrogate_trainer.train(resume_from_checkpoint=checkpoint)
         surrogate_trainer.save_model()
         surrogate_trainer.log_metrics("train", train_result.metrics)
@@ -876,9 +505,10 @@ def main():
     # Evaluation
     #######################################################
     if training_args.do_eval:
-        metrics = surrogate_trainer.evaluate()
-        surrogate_trainer.log_metrics("eval", metrics)
-        surrogate_trainer.save_metrics("eval", metrics)
+        print("eval loop")
+        metrics = surrogate_trainer.evaluate(dataset_surrogate["test"])
+        surrogate_trainer.log_metrics("test", metrics)
+        surrogate_trainer.save_metrics("test", metrics)
 
     ########################################################
     # Write model card and (optionally) push to hub
