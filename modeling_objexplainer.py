@@ -22,7 +22,7 @@ from transformers.utils import ModelOutput
 from modeling_surrogate import SurrogateForImageClassification
 
 
-class RegExplainerForImageClassificationConfig(PretrainedConfig):
+class ObjExplainerForImageClassificationConfig(PretrainedConfig):
     def __init__(
         self,
         surrogate_pretrained_model_name_or_path=None,
@@ -69,8 +69,9 @@ class RegExplainerForImageClassificationConfig(PretrainedConfig):
         super().__init__(**kwargs)
 
 
-class RegExplainerForImageClassification(PreTrainedModel):
-    config_class = RegExplainerForImageClassificationConfig
+# https://huggingface.co/docs/transformers/custom_models
+class ObjExplainerForImageClassification(PreTrainedModel):
+    config_class = ObjExplainerForImageClassificationConfig
     main_input_name = "pixel_values"
 
     def __init__(
@@ -146,7 +147,7 @@ class RegExplainerForImageClassification(PreTrainedModel):
     def grand(self, pixel_values):
         self.surrogate.eval()
         with torch.no_grad():
-            grand = self.link(
+            grand = (
                 self.surrogate(
                     pixel_values=pixel_values,
                     # (batch, channel, height, weight)
@@ -169,7 +170,7 @@ class RegExplainerForImageClassification(PreTrainedModel):
         else:
             self.surrogate.eval()
             with torch.no_grad():
-                self.surrogate_null = self.link(
+                self.surrogate_null = (
                     self.surrogate(
                         pixel_values=pixel_values[0:1],
                         masks=torch.zeros(
@@ -184,7 +185,15 @@ class RegExplainerForImageClassification(PreTrainedModel):
             return self.surrogate_null
 
     def forward(
-        self, pixel_values, shapley_values=None, labels=None, return_loss=True, **kwargs
+        self,
+        pixel_values,
+        masks=None,
+        model_outputs=None,
+        grand_values=None,
+        null_values=None,
+        labels=None,
+        return_loss=True,
+        **kwargs,
     ):
         output = self.explainer.surrogate(
             pixel_values=pixel_values, output_hidden_states=True
@@ -215,19 +224,78 @@ class RegExplainerForImageClassification(PreTrainedModel):
         # else:
         #     pred = self.mlps(last_hidden_state)
 
-        loss = None
+        if grand_values is None:
+            grand_values = self.grand(pixel_values)
+
+        surrogate_grand = self.link(grand_values.unsqueeze(0))[
+            0
+        ]  # (batch, channel, height, weight) -> (batch, num_classes)
+
+        if null_values is None:
+            null_values = self.null(pixel_values)
+
+        surrogate_null = self.link(null_values.unsqueeze(0))[0][
+            :1
+        ]  # (batch, channel, height, weight) -> (1, num_classes)
         # import ipdb
 
         # ipdb.set_trace()
+        values_pred = self.normalization(
+            pred=pred, grand=surrogate_grand, null=surrogate_null
+        )  # (batch, num_players, num_classes)
+
+        value_pred_beforenorm_sum = values_pred.sum(
+            dim=1
+        )  # (batch, num_players, num_classes) -> (batch, num_classes)
+        value_pred_beforenorm_sum_class = values_pred.sum(
+            dim=2
+        )  # (batch, num_players, num_classes) -> (batch, num_players)
+        # print(
+        #     "value_pred_beforenorm_sum",
+        #     value_pred_beforenorm_sum[0],
+        #     "value_pred_beforenorm_sum_class",
+        #     value_pred_beforenorm_sum_class[0],
+        # )
+        # F.mse_loss(
+        #     input=value_pred_beforenorm_sum_class,
+        #     target=torch.zeros_like(value_pred_beforenorm_sum_class),
+        #     reduction="mean",
+        # )
+        # 196 * F.mse_loss(
+        #     input=value_pred_beforenorm_sum,
+        #     target=surrogate_grand - surrogate_null,
+        #     reduction="mean",
+        # )
+        # 196 * F.mse_loss(
+        #     input=value_pred_for_regression, target=surrogate_prob, reduction="mean"
+        # )
+
+        loss = None
         if return_loss:
+            # infer patch size
+            patch_size = (
+                pixel_values.shape[2] * pixel_values.shape[3] / masks.shape[2]
+            ) ** (0.5)
+            num_mask_samples = masks.shape[1]
+            assert patch_size.is_integer(), "The patch size is not an integer"
+            patch_size = int(patch_size)
+
+            # surrogate_output = model_outputs  # (batch, channel, height, width), (batch, num_mask_samples, num_players) -> (batch, num_mask_samples, num_classes)
+            surrogate_prob = self.link(model_outputs)
+            value_pred_for_regression = (
+                surrogate_null + masks.float() @ values_pred
+            )  # (1, num_classes) + (batch, num_mask_samples, num_players) @ (batch, num_players, num_classes) -> (batch, num_mask_samples, num_classes)
+            # import ipdb
+
+            # ipdb.set_trace()
             value_diff = 196 * F.mse_loss(
-                input=pred, target=shapley_values.type(pred.dtype), reduction="mean"
-            )  # (batch, num_players, num_classes), (batch, num_players, num_classes)
+                input=value_pred_for_regression, target=surrogate_prob, reduction="mean"
+            )  # (batch, num_mask_samples, num_classes), (batch, num_mask_samples, num_classes)
 
             loss = value_diff
         return SemanticSegmenterOutput(
             loss=loss,
-            logits=pred.transpose(
+            logits=values_pred.transpose(
                 1, 2
             ),  # (batch, num_players, num_classes) -> (batch, num_classes, num_players)
         )

@@ -333,29 +333,44 @@ class MaskDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         if self.use_cache == True:
-            if isinstance(self.cache_start_idx, int):
-                start_idx = self.cache_start_idx
-            else:
-                start_idx = self.cache_start_idx(self.cache_counter_list[idx])
+            if (
+                self.masks is not None
+                or self.model_outputs is not None
+                or self.shapley_values is not None
+            ):
+                if isinstance(self.cache_start_idx, int):
+                    start_idx = self.cache_start_idx
+                else:
+                    start_idx = self.cache_start_idx(self.cache_counter_list[idx])
 
-            if isinstance(self.cache_mask_size, int):
-                step_size = self.cache_mask_size
-            else:
-                step_size = self.cache_mask_size(self.cache_counter_list[idx])
+                if isinstance(self.cache_mask_size, int):
+                    step_size = self.cache_mask_size
+                else:
+                    step_size = self.cache_mask_size(self.cache_counter_list[idx])
 
-            self.cache_counter_list[idx] = self.cache_counter_list[idx] + 1
+                self.cache_counter_list[idx] = self.cache_counter_list[idx] + 1
 
-            assert (start_idx + step_size) <= len(self.masks[idx])
-            if self.masks is not None:
-                item["masks"] = self.masks[idx][start_idx : start_idx + step_size]
-            if self.model_outputs is not None:
-                item["model_outputs"] = self.model_outputs[idx][
-                    start_idx : start_idx + step_size
-                ]
+                if self.masks is not None:
+                    assert (start_idx + step_size) <= len(
+                        self.masks[idx]
+                    ), f"start_idx: {start_idx}, step_size: {step_size}, len(self.masks[idx]): {len(self.masks[idx])}"
+                    item["masks"] = self.masks[idx][start_idx : start_idx + step_size]
+                if self.model_outputs is not None:
+                    assert (start_idx + step_size) <= len(
+                        self.model_outputs[idx]
+                    ), f"start_idx: {start_idx}, step_size: {step_size}, len(self.model_outputs[idx]): {len(self.model_outputs[idx])}"
+                    item["model_outputs"] = self.model_outputs[idx][
+                        start_idx : start_idx + step_size
+                    ]
+
+                if self.shapley_values is not None:
+                    item["shapley_values"] = self.shapley_values[idx][start_idx]
+
             if self.grand_values is not None:
                 item["grand_values"] = self.grand_values[idx]
             if self.null_values is not None:
                 item["null_values"] = self.null_values[idx]
+
         elif self.use_cache == False:
             if self.random_seed is None:
                 random_state = None
@@ -396,6 +411,7 @@ class MaskDataset(torch.utils.data.Dataset):
         model_outputs=None,
         grand_values=None,
         null_values=None,
+        shapley_values=None,
         cache_start_idx=0,
         cache_mask_size=1,
     ):
@@ -403,9 +419,9 @@ class MaskDataset(torch.utils.data.Dataset):
         self.cache_start_idx = cache_start_idx
         self.cache_mask_size = cache_mask_size
 
-        assert not (
-            masks is None and model_outputs is None
-        ), "masks and model_outputs cannot both be None"
+        # assert not (
+        #     masks is None and model_outputs is None
+        # ), "masks and model_outputs cannot both be None"
 
         if masks is None:
             self.masks = None
@@ -430,6 +446,12 @@ class MaskDataset(torch.utils.data.Dataset):
         else:
             assert len(self.dataset) == len(null_values)
             self.null_values = null_values
+
+        if shapley_values is None:
+            self.shapley_values = None
+        else:
+            assert len(self.dataset) == len(shapley_values)
+            self.shapley_values = shapley_values
 
         self.reset_cache_counter()
 
@@ -468,13 +490,27 @@ def get_checkpoint(training_args, logger):
     return checkpoint
 
 
-def load_shapley(path):
+def load_shapley(path, target_subset_size=None):
     file_list = glob.glob(str(Path(path) / "[0-9]*"))
     output_dict = {}
-    for file in tqdm(file_list):
-        loaded = torch.load(Path(file) / "shapley_output.pt")
+    if target_subset_size is None:
+        for file in tqdm(file_list):
+            loaded = torch.load(Path(file) / "shapley_output.pt")
 
-        output_dict[int(file.split("/")[-1])] = loaded
+            output_dict[int(file.split("/")[-1])] = loaded
+    else:
+        for file in tqdm(file_list):
+            subset_file_list = glob.glob(
+                str(Path(file) / f"shapley_output_{target_subset_size}_*.pt")
+            )
+            loaded_list = []
+            for subset_file in sorted(
+                subset_file_list,
+                key=lambda x: int(x.split("_")[-1].split(".")[0]),
+            ):
+                loaded = torch.load(subset_file)
+                loaded_list.append(loaded)
+            output_dict[int(file.split("/")[-1])] = loaded_list
 
     return output_dict
 
@@ -484,7 +520,7 @@ def read_eval_results(path):
         [
             p
             for p in glob.glob(str(Path(path) / "*.pt"))
-            if p.split("/")[-1] != "shapley_output.pt"
+            if not (p.split("/")[-1].startswith("shapley_output"))
         ]
     )
 
@@ -508,7 +544,7 @@ def read_eval_results(path):
             break
         idx += step_size
 
-    assert len(file_set) == 0
+    assert len(file_set) == 0, file_set
 
     grand_null = torch.load(path_grand_null)
     eval_list = [torch.load(path_eval) for path_eval in path_eval_list]

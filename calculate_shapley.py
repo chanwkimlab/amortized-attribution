@@ -1,451 +1,427 @@
-import argparse
-import glob
-from functools import partial
-from pathlib import Path
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2021 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+import copy
+import json
+import logging
+import os
+import sys
+import warnings
+from dataclasses import dataclass, field
+from typing import Optional
 
+import evaluate
+import ipdb
 import numpy as np
 import torch
-from scipy.special import softmax
+import transformers
+from datasets import load_dataset
+from torch.nn import functional as F
+
+# import tqdm
 from tqdm.auto import tqdm
+from transformers import (
+    MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
+    AutoConfig,
+    AutoImageProcessor,
+    AutoModelForImageClassification,
+    HfArgumentParser,
+    Trainer,
+    TrainingArguments,
+    set_seed,
+)
+from transformers.trainer_utils import get_last_checkpoint
+from transformers.utils import check_min_version, send_example_telemetry
+from transformers.utils.versions import require_version
 
-from utils import read_eval_results
+from arguments import ClassifierArguments, DataTrainingArguments, SurrogateArguments
+from models import (
+    SurrogateForImageClassification,
+    SurrogateForImageClassificationConfig,
+)
+from shapley_methods import ShapleySampling
+from utils import (
+    MaskDataset,
+    configure_dataset,
+    generate_mask,
+    get_checkpoint,
+    get_image_transform,
+    log_dataset,
+    setup_dataset,
+)
+
+""" Fine-tuning a 🤗 Transformers model for image classification"""
+
+logger = logging.getLogger(__name__)
+
+# Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+check_min_version("4.32.0.dev0")
+
+require_version(
+    "datasets>=1.8.0",
+    "To fix: pip install -r examples/pytorch/image-classification/requirements.txt",
+)
+
+MODEL_CONFIG_CLASSES = list(MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
-class ShapleyValues:
-    """For storing and plotting Shapley values."""
+@dataclass
+class OtherArguments:
+    permutation_sampling: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Extract output from the model. If None, will not extract output with N masks."
+        },
+    )
 
-    def __init__(self, values, std):
-        self.values = values
-        self.std = std
+    token: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "The token to use as HTTP bearer authorization for remote files. If not specified, will use the token "
+                "generated when running `huggingface-cli login` (stored in `~/.huggingface`)."
+            )
+        },
+    )
 
-    def plot(
-        self,
-        feature_names=None,
-        sort_features=True,
-        max_features=np.inf,
-        orientation="horizontal",
-        error_bars=True,
-        color="C0",
-        title="Feature Importance",
-        title_size=20,
-        tick_size=16,
-        tick_rotation=None,
-        axis_label="",
-        label_size=16,
-        figsize=(10, 7),
-        return_fig=False,
+
+def main():
+    ########################################################
+    # Parse arguments
+    #######################################################
+    # See all possible arguments in src/transformers/training_args.py
+    # or by passing the --help flag to this script.
+    # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    parser = HfArgumentParser(
+        (
+            ClassifierArguments,
+            SurrogateArguments,
+            DataTrainingArguments,
+            TrainingArguments,
+            OtherArguments,
+        )
+    )
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        # If we pass only one argument to the script and it's the path to a json file,
+        # let's parse it to get our arguments.
+        (
+            classifier_args,
+            surrogate_args,
+            data_args,
+            training_args,
+            other_args,
+        ) = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+    else:
+        (
+            classifier_args,
+            surrogate_args,
+            data_args,
+            training_args,
+            other_args,
+        ) = parser.parse_args_into_dataclasses()
+
+    ########################################################
+    # Setup logging
+    #######################################################
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
+    if training_args.should_log:
+        # The default of training_args.log_level is passive, so we set log level at info here to have that default.
+        transformers.utils.logging.set_verbosity_info()
+
+    log_level = training_args.get_process_log_level()
+    logger.setLevel(log_level)
+    transformers.utils.logging.set_verbosity(log_level)
+    transformers.utils.logging.enable_default_handler()
+    transformers.utils.logging.enable_explicit_format()
+
+    # Log on each process the small summary:
+    logger.warning(
+        f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
+        + f"distributed training: {training_args.parallel_mode.value == 'distributed'}, 16-bits training: {training_args.fp16}"
+    )
+    logger.info(f"Training/evaluation parameters {training_args}")
+
+    ########################################################
+    # Correct cache dir if necessary
+    ########################################################
+    if not os.path.exists(
+        os.sep.join((data_args.dataset_cache_dir).split(os.sep, 2)[:2])
     ):
-        """
-        Plot Shapley values.
-
-        Args:
-        feature_names: list of feature names.
-        sort_features: whether to sort features by their Shapley values.
-        max_features: number of features to display.
-        orientation: horizontal (default) or vertical.
-        error_bars: whether to include standard deviation error bars.
-        color: bar chart color.
-        title: plot title.
-        title_size: font size for title.
-        tick_size: font size for feature names and numerical values.
-        tick_rotation: tick rotation for feature names (vertical plots only).
-        label_size: font size for label.
-        figsize: figure size (if fig is None).
-        return_fig: whether to return matplotlib figure object.
-        """
-        return plotting.plot(
-            self,
-            feature_names,
-            sort_features,
-            max_features,
-            orientation,
-            error_bars,
-            color,
-            title,
-            title_size,
-            tick_size,
-            tick_rotation,
-            axis_label,
-            label_size,
-            figsize,
-            return_fig,
-        )
-
-
-def default_min_variance_samples(game):
-    """Determine min_variance_samples."""
-    return 5
-
-
-def default_variance_batches(num_players, batch_size):
-    """
-    Determine variance_batches.
-
-    This value tries to ensure that enough samples are included to make A
-    approximation non-singular.
-    """
-
-    return int(np.ceil(10 * num_players / batch_size))
-
-
-def calculate_result(A, b, total):
-    """Calculate the regression coefficients."""
-    num_players = A.shape[1]
-    try:
-        if len(b.shape) == 2:
-            A_inv_one = np.linalg.solve(A, np.ones((num_players, 1)))
+        if os.path.exists("/data2"):
+            data_args.dataset_cache_dir = os.sep.join(
+                ["/data2"] + (data_args.dataset_cache_dir).split(os.sep, 2)[2:]
+            )
+            logger.info(
+                f"dataset_cache_dir {data_args.dataset_cache_dir} not found, using {data_args.dataset_cache_dir}"
+            )
+        elif os.path.exists("/sdata"):
+            data_args.dataset_cache_dir = os.sep.join(
+                ["/sdata"] + (data_args.dataset_cache_dir).split(os.sep, 2)[2:]
+            )
+            logger.info(
+                f"dataset_cache_dir {data_args.dataset_cache_dir} not found, using {data_args.dataset_cache_dir}"
+            )
         else:
-            A_inv_one = np.linalg.solve(A, np.ones(num_players))
-        A_inv_vec = np.linalg.solve(A, b)
-        values = A_inv_vec - A_inv_one * (
-            np.sum(A_inv_vec, axis=0, keepdims=True) - total
-        ) / np.sum(A_inv_one)
-    except np.linalg.LinAlgError:
-        raise ValueError(
-            "singular matrix inversion. Consider using larger " "variance_batches"
+            raise ValueError(
+                f"dataset_cache_dir {data_args.dataset_cache_dir} not found"
+            )
+
+    ########################################################
+    # Set seed before initializing model.
+    ########################################################
+    set_seed(training_args.seed)
+
+    ########################################################
+    # Initialize our dataset and prepare it for the 'image-classification' task.
+    ########################################################
+    dataset_original, labels, label2id, id2label = setup_dataset(
+        data_args=data_args, other_args=other_args
+    )
+
+    ########################################################
+    # Initialize classifier model
+    ########################################################
+    classifier_config = AutoConfig.from_pretrained(
+        classifier_args.classifier_config_name
+        or classifier_args.classifier_model_name_or_path,
+        num_labels=len(labels),
+        label2id=label2id,
+        id2label=id2label,
+        finetuning_task="image-classification",
+        cache_dir=classifier_args.classifier_cache_dir,
+        revision=classifier_args.classifier_model_revision,
+        token=other_args.token,
+    )
+
+    ########################################################
+    # Initialize surrogate model
+    ########################################################
+    surrogate_config = AutoConfig.from_pretrained(
+        surrogate_args.surrogate_config_name
+        or surrogate_args.surrogate_model_name_or_path,
+        num_labels=len(labels),
+        label2id=label2id,
+        id2label=id2label,
+        finetuning_task="image-classification",
+        cache_dir=surrogate_args.surrogate_cache_dir,
+        revision=surrogate_args.surrogate_model_revision,
+        token=other_args.token,
+    )
+
+    if os.path.isfile(
+        f"{surrogate_args.surrogate_model_name_or_path}/config.json"
+    ) and (
+        json.loads(
+            open(f"{surrogate_args.surrogate_model_name_or_path}/config.json").read()
+        )["architectures"][0]
+        == "SurrogateForImageClassification"
+    ):
+        surrogate = SurrogateForImageClassification.from_pretrained(
+            surrogate_args.surrogate_model_name_or_path,
+            from_tf=bool(".ckpt" in surrogate_args.surrogate_model_name_or_path),
+            config=surrogate_config,
+            cache_dir=surrogate_args.surrogate_cache_dir,
+            revision=surrogate_args.surrogate_model_revision,
+            token=other_args.token,
+            ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
+        )
+    else:
+        surrogate_for_image_classification_config = SurrogateForImageClassificationConfig(
+            classifier_pretrained_model_name_or_path=classifier_args.classifier_model_name_or_path,
+            classifier_config=classifier_config,
+            classifier_from_tf=bool(
+                ".ckpt" in classifier_args.classifier_model_name_or_path
+            ),
+            classifier_cache_dir=classifier_args.classifier_cache_dir,
+            classifier_revision=classifier_args.classifier_model_revision,
+            classifier_token=other_args.token,
+            classifier_ignore_mismatched_sizes=classifier_args.classifier_ignore_mismatched_sizes,
+            surrogate_pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
+            surrogate_config=surrogate_config,
+            surrogate_from_tf=bool(
+                ".ckpt" in surrogate_args.surrogate_model_name_or_path
+            ),
+            surrogate_cache_dir=surrogate_args.surrogate_cache_dir,
+            surrogate_revision=surrogate_args.surrogate_model_revision,
+            surrogate_token=other_args.token,
+            surrogate_ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
         )
 
-    return values
+        surrogate = SurrogateForImageClassification(
+            config=surrogate_for_image_classification_config,
+        )
 
+    surrogate_image_processor = AutoImageProcessor.from_pretrained(
+        surrogate_args.surrogate_image_processor_name
+        or surrogate_args.surrogate_model_name_or_path,
+        cache_dir=surrogate_args.surrogate_cache_dir,
+        revision=surrogate_args.surrogate_model_revision,
+        token=other_args.token,
+    )
 
-def ShapleyRegressionPrecomputed(
-    grand_value,
-    null_value,
-    model_outputs,
-    masks,
-    num_players,
-    batch_size=512,
-    detect_convergence=True,
-    thresh=0.01,
-    n_samples=None,
-    paired_sampling=True,
-    return_all=False,
-    min_variance_samples=None,
-    variance_batches=None,
-    bar=True,
-    verbose=False,
-):
-    # Verify arguments.
-    from tqdm.auto import tqdm
+    ########################################################
+    # Configure dataset (set max samples, transforms, etc.)
+    ########################################################
+    dataset_surrogate = copy.deepcopy(dataset_original)
+    dataset_surrogate = configure_dataset(
+        dataset=dataset_surrogate,
+        image_processor=surrogate_image_processor,
+        training_args=training_args,
+        data_args=data_args,
+        train_augmentation=False,
+        validation_augmentation=False,
+        test_augmentation=False,
+        logger=logger,
+    )
+    log_dataset(dataset=dataset_surrogate, logger=logger)
 
-    if min_variance_samples is None:
-        min_variance_samples = 5
-    else:
-        assert isinstance(min_variance_samples, int)
-        assert min_variance_samples > 1
+    ########################################################
+    # Initalize the surrogate trainer
+    ########################################################
 
-    if variance_batches is None:
-        variance_batches = default_variance_batches(num_players, batch_size)
-    else:
-        assert isinstance(variance_batches, int)
-        assert variance_batches >= 1
+    # Load the accuracy metric from the datasets package
+    metric = evaluate.load("accuracy")
 
-    # Possibly force convergence detection.
-    if n_samples is None:
-        n_samples = 1e20
-        if not detect_convergence:
-            detect_convergence = True
-            if verbose:
-                print("Turning convergence detection on")
+    # Define our compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
+    # predictions and label_ids field) and has to return a dictionary string to float.
+    def compute_metrics(p):
+        """Computes accuracy on a batch of predictions"""
+        return metric.compute(
+            predictions=np.argmax(p.predictions[0][:, 0, :], axis=1),
+            references=p.label_ids,
+        )
 
-    if detect_convergence:
-        assert 0 < thresh < 1
+    def collate_fn(examples):
+        pixel_values = torch.stack([example["pixel_values"] for example in examples])
+        labels = torch.tensor([example["labels"] for example in examples])
+        masks = torch.tensor(np.array([example["masks"] for example in examples]))
 
-    # Weighting kernel (probability of each subset size).
-    weights = np.arange(1, num_players)
-    weights = 1 / (weights * (num_players - weights))
-    weights = weights / np.sum(weights)
+        return {
+            "pixel_values": pixel_values,
+            "labels": labels,
+            "masks": masks,
+        }
 
-    # Calculate null and grand coalitions for constraints.
-    null = null_value
-    grand = grand_value
+    surrogate_trainer = Trainer(
+        model=surrogate,
+        args=training_args,
+        train_dataset=dataset_surrogate["train"] if training_args.do_train else None,
+        eval_dataset=dataset_surrogate["validation"]
+        if training_args.do_train
+        else None,
+        compute_metrics=compute_metrics,
+        tokenizer=surrogate_image_processor,
+        data_collator=collate_fn,
+    )
 
-    # Calculate difference between grand and null coalitions.
-    total = grand - null
-
-    # Set up bar.
-    n_loops = int(np.ceil(n_samples / batch_size))
-    if bar:
-        if detect_convergence:
-            bar = tqdm(total=1)
+    if other_args.permutation_sampling:
+        if (
+            isinstance(other_args.permutation_sampling, str)
+            and "," in other_args.permutation_sampling
+        ):
+            permutation_sampling_key = {
+                "train": int(other_args.permutation_sampling.split(",")[0]),
+                "validation": int(other_args.permutation_sampling.split(",")[1]),
+                "test": int(other_args.permutation_sampling.split(",")[2]),
+            }
         else:
-            bar = tqdm(total=n_loops * batch_size)
+            permutation_sampling_key = {
+                "train": int(other_args.permutation_sampling),
+                "validation": int(other_args.permutation_sampling),
+                "test": int(other_args.permutation_sampling),
+            }
 
-    # Setup.
-    n = 0
-    b = 0
-    A = 0
-    estimate_list = []
-
-    # For variance estimation.
-    A_sample_list = []
-    b_sample_list = []
-
-    # For tracking progress.
-    var = np.nan * np.ones(num_players)
-    if return_all:
-        N_list = []
-        std_list = []
-        val_list = []
-
-    # Begin sampling.
-    for it in range(n_loops):
-        # Sample subsets.
-        # print(subsets.shape)
-        S = masks[batch_size * it : batch_size * (it + 1)]
-        game_S = model_outputs[batch_size * it : batch_size * (it + 1)]
-        #         print("S", S, S.sum(axis=1))
-        #         print("game(s)", game_S)
-        #         print("game(s)-null", game_S-null)
-
-        A_sample = np.matmul(
-            S[:, :, np.newaxis].astype(float), S[:, np.newaxis, :].astype(float)
+        dataset_permutation_sampling = copy.deepcopy(dataset_original)
+        dataset_permutation_sampling = configure_dataset(
+            dataset=dataset_permutation_sampling,
+            image_processor=surrogate_image_processor,
+            training_args=training_args,
+            data_args=data_args,
+            train_augmentation=False,
+            validation_augmentation=False,
+            test_augmentation=False,
+            logger=logger,
         )
+        log_dataset(dataset=dataset_permutation_sampling, logger=logger)
 
-        b_sample = (S.astype(float).T * (game_S - null)[:, np.newaxis].T).T
+        for dataset_key in dataset_permutation_sampling.keys():
+            if permutation_sampling_key[dataset_key] == 0:
+                continue
+            from scipy.special import softmax
 
-        #         print("b", b_sample)
-        #         print("variance_batches", variance_batches)
+            for sample_idx in tqdm(
+                range(len(dataset_permutation_sampling[dataset_key]))
+            ):
 
-        # Welford's algorithm.
-        n += batch_size
-        b += np.sum(b_sample - b, axis=0) / n
-        A += np.sum(A_sample - A, axis=0) / n
+                class SampleDataset:
+                    def __init__(self, dataset, sample_idx, masks_list):
+                        self.dataset = dataset
+                        self.sample_idx = sample_idx
+                        self.masks_list = masks_list
 
-        # Calculate progress.
-        values = calculate_result(A, b, total)
-        A_sample_list.append(A_sample)
-        b_sample_list.append(b_sample)
-        if len(A_sample_list) == variance_batches:
-            # Aggregate samples for intermediate estimate.
-            A_sample = np.concatenate(A_sample_list, axis=0).mean(axis=0)
-            b_sample = np.concatenate(b_sample_list, axis=0).mean(axis=0)
-            A_sample_list = []
-            b_sample_list = []
+                    def __getitem__(self, idx):
+                        item = self.dataset[self.sample_idx]
+                        item["masks"] = self.masks_list[idx]
+                        return item
 
-            # Add new estimate.
-            estimate_list.append(calculate_result(A_sample, b_sample, total))
+                    def __len__(self):
+                        return len(self.masks_list)
 
-            # Estimate current var.
-            # print(len(estimate_list), min_variance_samples)
-            if len(estimate_list) >= min_variance_samples:
-                var = np.array(estimate_list).var(axis=0)
+                func = lambda x: softmax(
+                    surrogate_trainer.predict(
+                        SampleDataset(
+                            dataset=dataset_permutation_sampling[dataset_key],
+                            sample_idx=sample_idx,
+                            masks_list=x,
+                        ),
+                    ).predictions[0],
+                    axis=2,
+                )
 
-        # Convergence ratio.
-        std = np.sqrt(var * variance_batches / (it + 1))
-        ratio = np.max(np.max(std, axis=0) / (values.max(axis=0) - values.min(axis=0)))
-        # print("std", var)
-        # Print progress message.
-        if verbose:
-            if detect_convergence:
-                print(f"StdDev Ratio = {ratio:.4f} (Converge at {thresh:.4f})")
-            else:
-                print(f"StdDev Ratio = {ratio:.4f}")
+                print(func([np.zeros((4, 196)), np.ones((4, 196))]))
 
-        # Check for convergence.
-        if detect_convergence:
-            if ratio < thresh:
-                if verbose:
-                    print("Detected convergence")
+                _, tracking_dict, ratio = ShapleySampling(
+                    surrogate=func,
+                    num_players=196,
+                    total_samples=int(
+                        np.ceil(permutation_sampling_key[dataset_key] / 196)
+                    ),
+                    detect_convergence=True,
+                    return_all=True,
+                )
 
-                # Skip bar ahead.
-                if bar:
-                    bar.n = bar.total
-                    bar.refresh()
-                break
+                save_path = os.path.join(
+                    training_args.output_dir,
+                    "extract_output",
+                    dataset_key,
+                    str(sample_idx),
+                    f"shapley_output.pt",
+                )
+                # make dir
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-        # Forecast number of iterations required.
-        if detect_convergence:
-            N_est = (it + 1) * (ratio / thresh) ** 2
-            if bar and not np.isnan(N_est):
-                bar.n = np.around((it + 1) / N_est, 4)
-                bar.refresh()
-        elif bar:
-            bar.update(batch_size)
+                torch.save(obj=tracking_dict, f=save_path)
 
-        # Save intermediate quantities.
-        if return_all:
-            val_list.append(values)
-            std_list.append(std)
-            if detect_convergence:
-                N_list.append(N_est)
-
-        # print("size", batch_size*it, len(masks))
-        if batch_size * (it + 1) >= len(masks):
-            break
-    # print(ratio)
-    # Return results.
-    if return_all:
-        # Dictionary for progress tracking.
-        iters = (np.arange(it + 1) + 1) * batch_size * (1)
-        tracking_dict = {"values": val_list, "std": std_list, "iters": iters}
-        if detect_convergence:
-            tracking_dict["N_est"] = N_list
-
-        return ShapleyValues(values, std), tracking_dict, ratio
-    else:
-        return ShapleyValues(values, std), ratio
-
-
-# def read_eval_results(path):
-#     file_set = set(
-#         [
-#             p
-#             for p in glob.glob(str(Path(path) / "*.pt"))
-#             if p.split("/")[-1] != "shapley_output.pt"
-#         ]
-#     )
-
-#     path_grand_null = str(Path(path) / "grand_null.pt")
-#     file_set.remove(path_grand_null)
-
-#     file_list = sorted(list(file_set), key=lambda x: x.split("_")[-2])
-#     begin_idx = int(file_list[0].split("_")[-2])
-#     end_idx = int(file_list[0].split("_")[-1].replace(".pt", ""))
-#     step_size = end_idx - begin_idx
-
-#     idx = begin_idx
-
-#     path_eval_list = []
-#     while True:
-#         path_eval = str(Path(path) / f"mask_eval_{idx}_{idx+step_size}.pt")
-#         if path_eval in file_set:
-#             file_set.remove(path_eval)
-#             path_eval_list.append(path_eval)
-#         else:
-#             break
-#         idx += step_size
-
-#     assert len(file_set) == 0
-
-#     grand_null = torch.load(path_grand_null)
-#     eval_list = [torch.load(path_eval) for path_eval in path_eval_list]
-
-#     grand_logits = grand_null["logits"][0]
-#     grand_masks = grand_null["masks"][0]
-#     null_logits = grand_null["logits"][1]
-#     nulll_masks = grand_null["masks"][1]
-
-#     eval_logits = np.concatenate(
-#         [eval_value["logits"] for eval_value in eval_list], axis=0
-#     )
-#     eval_masks = np.concatenate(
-#         [eval_value["masks"] for eval_value in eval_list], axis=0
-#     )
-
-#     return {
-#         "grand": {"logits": grand_logits, "masks": grand_masks},
-#         "null": {"logits": null_logits, "masks": nulll_masks},
-#         "subsets": {"logits": eval_logits, "masks": eval_masks},
-#     }
-
-
-def get_args():
-    """Parse the command line arguments."""
-    parser = argparse.ArgumentParser(description="Process some inputs.")
-
-    # Argument for batch size without default
-    parser.add_argument(
-        "--batch_size", type=int, required=True, help="The batch size for processing."
-    )
-
-    # Argument for input path without default
-    parser.add_argument(
-        "--input_path", type=str, required=True, help="Path to the input directory."
-    )
-
-    # Argument for normalization function
-    parser.add_argument(
-        "--normalize_function",
-        type=str,
-        choices=["softmax"],
-        required=True,
-        help="The normalization function to be used. Options: softmax.",
-    )
-
-    parser.add_argument(
-        "--num_players", type=int, required=True, help="The number of players"
-    )
-
-    return parser.parse_args()
+                print()
 
 
 if __name__ == "__main__":
-    args = get_args()
-
-    # Accessing the arguments
-    batch_size = args.batch_size
-    input_path = args.input_path
-    if args.normalize_function == "softmax":
-        normalize_function = softmax
-    else:
-        raise ValueError("Unsupported normalization function")
-    num_players = args.num_players
-
-    sample_list = glob.glob(str(Path(input_path) / "[0-9]*"))
-
-    pbar = tqdm(sample_list)
-    subsets_output_prev = None
-    for sample_path in pbar:
-        eval_results = read_eval_results(path=sample_path)
-
-        grand_value = eval_results["grand"]["logits"]
-        if len(grand_value.shape) == 1:
-            grand_value = partial(normalize_function, axis=0)(grand_value)
-        else:
-            raise RuntimeError(f"Not supported grand shape {grand_value.shape}")
-
-        null_value = eval_results["null"]["logits"]
-        if len(null_value.shape) == 1:
-            null_value = partial(normalize_function, axis=0)(null_value)
-        else:
-            raise RuntimeError(f"Not supported null shape {null_value.shape}")
-
-        subsets_output = eval_results["subsets"]["logits"]
-        if len(subsets_output.shape) == 2:
-            subsets_output = partial(normalize_function, axis=1)(subsets_output)
-        else:
-            raise RuntimeError(
-                f"Not supported subset outputs shape {subsets_output.shape}"
-            )
-        if subsets_output_prev is not None and len(subsets_output) != len(
-            subsets_output_prev
-        ):
-            print(
-                "subsets_output_prev",
-                subsets_output_prev.shape,
-                "subsets_output",
-                subsets_output.shape,
-                "sample_path",
-                sample_path,
-            )
-
-        subsets = eval_results["subsets"]["masks"]
-
-        assert (
-            subsets_output.shape[1] == grand_value.shape[0] == null_value.shape[0]
-        ), f"Num of classes mismatch {subsets_output.shape[1]} , {grand_value.shape[0]} , {null_value.shape[0]}"
-        assert (
-            subsets.shape[1] == num_players
-        ), f"Num of players mismatch {subsets.shape[1]} != {num_players}"
-
-        _, tracking_dict, ratio = ShapleyRegressionPrecomputed(
-            grand_value=grand_value,
-            null_value=null_value,
-            model_outputs=subsets_output,
-            masks=subsets,
-            batch_size=batch_size,
-            num_players=num_players,
-            variance_batches=2,
-            min_variance_samples=2,
-            return_all=True,
-            bar=False,
-        )
-
-        torch.save(obj=tracking_dict, f=str(Path(sample_path) / "shapley_output.pt"))
-
-        pbar.set_postfix(
-            ratio=ratio,
-            num_masks=len(subsets),
-            refresh=True,
-        )
+    main()
