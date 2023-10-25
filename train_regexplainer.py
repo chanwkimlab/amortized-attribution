@@ -350,6 +350,9 @@ def main():
             )
 
         if mask_mode.startswith("upfront"):
+            import ipdb
+
+            ipdb.set_trace()
             masks_param = int(mask_mode.split(",")[1])
             load_shapley_dict = load_shapley(cache_path)
 
@@ -363,12 +366,15 @@ def main():
                 assert len(load_shapley_dict[sample_idx]["iters"]) == len(
                     load_shapley_dict[sample_idx]["values"]
                 ), f"{len(load_shapley_dict[sample_idx]['iters'])} != {len(load_shapley_dict[sample_idx]['values'])}"
+                if isinstance(load_shapley_dict[sample_idx]["iters"], np.ndarray):
+                    load_shapley_dict[sample_idx]["iters"] = load_shapley_dict[
+                        sample_idx
+                    ]["iters"].tolist()
+
                 shapley_output_all.append(
                     [
                         load_shapley_dict[sample_idx]["values"][
-                            load_shapley_dict[sample_idx]["iters"]
-                            .tolist()
-                            .index(masks_param)
+                            load_shapley_dict[sample_idx]["iters"].index(masks_param)
                         ]
                     ]
                 )

@@ -1,12 +1,12 @@
-from modeling_objexplainer import (
+from modeling.modeling_objexplainer import (
     ObjExplainerForImageClassification,
     ObjExplainerForImageClassificationConfig,
 )
-from modeling_regexplainer import (
+from modeling.modeling_regexplainer import (
     RegExplainerForImageClassification,
     RegExplainerForImageClassificationConfig,
 )
-from modeling_surrogate import (
+from modeling.modeling_surrogate import (
     SurrogateForImageClassification,
     SurrogateForImageClassificationConfig,
 )

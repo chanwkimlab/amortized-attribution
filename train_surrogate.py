@@ -78,7 +78,21 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 @dataclass
 class OtherArguments:
-    extract_output: Optional[str] = field(
+    antithetical_sampling: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use antithetical sampling for the surrogate model."
+        },
+    )
+
+    extract_output_shapley: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Extract output from the model. If None, will not extract output with N masks."
+        },
+    )
+
+    extract_output_banzhaf: Optional[str] = field(
         default=None,
         metadata={
             "help": "Extract output from the model. If None, will not extract output with N masks."
@@ -370,21 +384,21 @@ def main():
         data_collator=collate_fn,
     )
 
-    if other_args.extract_output:
+    if other_args.extract_output_shapley:
         if (
-            isinstance(other_args.extract_output, str)
-            and "," in other_args.extract_output
+            isinstance(other_args.extract_output_shapley, str)
+            and "," in other_args.extract_output_shapley
         ):
-            extract_output_key = {
-                "train": int(other_args.extract_output.split(",")[0]),
-                "validation": int(other_args.extract_output.split(",")[1]),
-                "test": int(other_args.extract_output.split(",")[2]),
+            extract_output_shapley_key = {
+                "train": int(other_args.extract_output_shapley.split(",")[0]),
+                "validation": int(other_args.extract_output_shapley.split(",")[1]),
+                "test": int(other_args.extract_output_shapley.split(",")[2]),
             }
         else:
-            extract_output_key = {
-                "train": int(other_args.extract_output),
-                "validation": int(other_args.extract_output),
-                "test": int(other_args.extract_output),
+            extract_output_shapley_key = {
+                "train": int(other_args.extract_output_shapley),
+                "validation": int(other_args.extract_output_shapley),
+                "test": int(other_args.extract_output_shapley),
             }
 
         dataset_extract = copy.deepcopy(dataset_original)
@@ -414,7 +428,7 @@ def main():
 
         log_dataset(dataset=dataset_extract, logger=logger)
         for dataset_key in dataset_extract.keys():
-            if extract_output_key[dataset_key] == 0:
+            if extract_output_shapley_key[dataset_key] == 0:
                 continue
             predict_output = surrogate_trainer.predict(dataset_extract[dataset_key])
             logger.info("Saving grand null output of the surrogate model")
@@ -441,7 +455,7 @@ def main():
             dataset_extract[dataset_key].set_params(
                 num_features=196,
                 num_mask_samples=other_args.num_mask_samples,
-                paired_mask_samples=False,
+                paired_mask_samples=other_args.antithetical_sampling,
                 mode="shapley",
                 random_seed=training_args.seed,
             )
@@ -450,14 +464,18 @@ def main():
             # continue
             for idx in tqdm(
                 range(
-                    (extract_output_key[dataset_key] + other_args.num_mask_samples - 1)
+                    (
+                        extract_output_shapley_key[dataset_key]
+                        + other_args.num_mask_samples
+                        - 1
+                    )
                     // other_args.num_mask_samples
                 )
             ):
                 dataset_extract[dataset_key].set_params(
                     num_features=196,
                     num_mask_samples=other_args.num_mask_samples,
-                    paired_mask_samples=False,
+                    paired_mask_samples=other_args.antithetical_sampling,
                     mode="shapley",
                     random_seed=training_args.seed + idx,
                 )
@@ -482,10 +500,126 @@ def main():
                         save_path,
                     )
 
-        # torch.save(dataset_extract, ("logs/extract_output.dataset.pt"))
+    if other_args.extract_output_banzhaf:
+        if (
+            isinstance(other_args.extract_output_banzhaf, str)
+            and "," in other_args.extract_output_banzhaf
+        ):
+            extract_output_banzhaf_key = {
+                "train": int(other_args.extract_output_banzhaf.split(",")[0]),
+                "validation": int(other_args.extract_output_banzhaf.split(",")[1]),
+                "test": int(other_args.extract_output_banzhaf.split(",")[2]),
+            }
+        else:
+            extract_output_banzhaf_key = {
+                "train": int(other_args.extract_output_banzhaf),
+                "validation": int(other_args.extract_output_banzhaf),
+                "test": int(other_args.extract_output_banzhaf),
+            }
 
-        # torch.save(save_dict, os.path.join(training_args.output_dir, "extract_output.pt"))
-        # torch.save(save_dict, os.path.join(training_args.output_dir, "extract_output.pt"))
+        dataset_extract = copy.deepcopy(dataset_original)
+        dataset_extract = configure_dataset(
+            dataset=dataset_extract,
+            image_processor=surrogate_image_processor,
+            training_args=training_args,
+            data_args=data_args,
+            train_augmentation=False,
+            validation_augmentation=False,
+            test_augmentation=False,
+            logger=logger,
+        )
+
+        # save grand null
+        logger.info("Calculating grand null output of the surrogate model")
+        save_dict = {}
+        for dataset_key in dataset_extract.keys():
+            dataset_extract[dataset_key] = MaskDataset(
+                dataset_extract[dataset_key],
+                num_features=196,
+                num_mask_samples=2,
+                paired_mask_samples=True,
+                mode="full",
+                random_seed=None,
+            )
+
+        log_dataset(dataset=dataset_extract, logger=logger)
+        for dataset_key in dataset_extract.keys():
+            if extract_output_banzhaf_key[dataset_key] == 0:
+                continue
+            predict_output = surrogate_trainer.predict(dataset_extract[dataset_key])
+            logger.info("Saving grand null output of the surrogate model")
+            for sample_idx in tqdm(range(len(predict_output.predictions[0]))):
+                save_path = os.path.join(
+                    training_args.output_dir,
+                    "extract_output",
+                    dataset_key,
+                    str(sample_idx),
+                    "grand_null.pt",
+                )
+                # make dir
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                torch.save(
+                    {
+                        "logits": predict_output.predictions[0][sample_idx],
+                        "masks": predict_output.predictions[1][sample_idx],
+                    },
+                    save_path,
+                )
+        # save mask evaluation results
+        logger.info("Calculating mask evaluation results")
+        for dataset_key in dataset_extract.keys():
+            dataset_extract[dataset_key].set_params(
+                num_features=196,
+                num_mask_samples=other_args.num_mask_samples,
+                paired_mask_samples=other_args.antithetical_sampling,
+                mode="banzhaf",
+                random_seed=training_args.seed,
+            )
+        log_dataset(dataset=dataset_extract, logger=logger)
+        for dataset_key in dataset_extract.keys():
+            # continue
+            for idx in tqdm(
+                range(
+                    (
+                        extract_output_banzhaf_key[dataset_key]
+                        + other_args.num_mask_samples
+                        - 1
+                    )
+                    // other_args.num_mask_samples
+                )
+            ):
+                dataset_extract[dataset_key].set_params(
+                    num_features=196,
+                    num_mask_samples=other_args.num_mask_samples,
+                    paired_mask_samples=other_args.antithetical_sampling,
+                    mode="banzhaf",
+                    random_seed=training_args.seed + idx,
+                )
+
+                predict_output = surrogate_trainer.predict(dataset_extract[dataset_key])
+                logger.info("Saving mask evaluation results")
+                for sample_idx in tqdm(range(len(predict_output.predictions[0]))):
+                    save_path = os.path.join(
+                        training_args.output_dir,
+                        "extract_output",
+                        dataset_key,
+                        str(sample_idx),
+                        f"mask_eval_{idx*other_args.num_mask_samples}_{(idx+1)*other_args.num_mask_samples}.pt",
+                    )
+                    # make dir
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    torch.save(
+                        {
+                            "logits": predict_output.predictions[0][sample_idx],
+                            "masks": predict_output.predictions[1][sample_idx],
+                        },
+                        save_path,
+                    )
+
+        # torch.save(dataset_extract, ("logs/extract_output_shapley.dataset.pt"))
+
+        # torch.save(save_dict, os.path.join(training_args.output_dir, "extract_output_shapley.pt"))
+        # torch.save(save_dict, os.path.join(training_args.output_dir, "extract_output_shapley.pt"))
         # # save dataset_extract
         # dataset_extract.save_to_disk(os.path.join(training_args.output_dir, "dataset_extract"))
 

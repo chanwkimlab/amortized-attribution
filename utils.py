@@ -282,6 +282,8 @@ def generate_mask(
             random_state.rand(num_samples_, num_features)
             > random_state.rand(num_samples_, 1)
         ).astype("int")
+    elif mode == "banzhaf":
+        masks = (np.random.rand(num_samples_, num_features) > 0.5).astype("int")
     elif mode == "shapley":
         probs = 1 / (
             np.arange(1, num_features) * (num_features - np.arange(1, num_features))
