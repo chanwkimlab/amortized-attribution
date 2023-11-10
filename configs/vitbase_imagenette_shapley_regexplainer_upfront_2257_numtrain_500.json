@@ -13,8 +13,8 @@
     "train_shapley_cache_path": "logs/vitbase_imagenette_surrogate_shapley_eval_train/extract_output/train",
     "validation_shapley_cache_path": "logs/vitbase_imagenette_surrogate_shapley_eval_validation/extract_output/validation",
     "test_shapley_cache_path": "logs/vitbase_imagenette_surrogate_shapley_eval_test/extract_output/test",
-    "train_mask_mode": "upfront,512",
-    "validation_mask_mode": "upfront,512",
+    "train_mask_mode": "targetupfront,2257,500",
+    "validation_mask_mode": "targetupfront,2257",
     "test_mask_mode": "upfront,32",
     "learning_rate": 1e-4,
     "num_train_epochs": 100,
@@ -31,6 +31,6 @@
     "load_best_model_at_end": true,
     "save_total_limit": 100,
     "seed": 42,
-    "output_dir": "./logs/vitbase_imagenette_shapley_regexplainer_upfront_512_flops",
+    "output_dir": "./logs/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_500",
     "report_to": "wandb"
 }

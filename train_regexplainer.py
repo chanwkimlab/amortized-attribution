@@ -350,9 +350,6 @@ def main():
             )
 
         if mask_mode.startswith("upfront"):
-            import ipdb
-
-            ipdb.set_trace()
             masks_param = int(mask_mode.split(",")[1])
             load_shapley_dict = load_shapley(cache_path)
 
@@ -378,6 +375,72 @@ def main():
                         ]
                     ]
                 )
+            dataset_explainer[dataset_key] = MaskDataset(
+                dataset_explainer[dataset_key],
+            )
+
+            dataset_explainer[dataset_key].set_cache(
+                shapley_values=shapley_output_all,
+                cache_start_idx=0,
+                cache_mask_size=0,
+            )
+
+        elif mask_mode.startswith("targetupfront"):
+            masks_param = int(mask_mode.split(",")[1])
+            if len(mask_mode.split(",")) == 3:
+                datasize_param = int(mask_mode.split(",")[2])
+            else:
+                datasize_param = None
+
+            load_shapley_dict = load_shapley(cache_path, target_subset_size=masks_param)
+
+            assert len(dataset_explainer[dataset_key]) == len(
+                load_shapley_dict
+            ), f"eval list: {len(dataset_explainer[dataset_key])} != {len(load_shapley_dict)}"
+
+            shapley_output_all = []
+
+            for sample_idx in range(len(dataset_explainer[dataset_key])):
+                shapley_output_list = []
+                for subset_group_idx in range(len(load_shapley_dict[sample_idx])):
+                    assert len(
+                        load_shapley_dict[sample_idx][subset_group_idx]["iters"]
+                    ) == len(
+                        load_shapley_dict[sample_idx][subset_group_idx]["values"]
+                    ), f"{len(load_shapley_dict[sample_idx][subset_group_idx]['iters'])} != {len(load_shapley_dict[sample_idx][subset_group_idx]['values'])}"
+
+                    if isinstance(
+                        load_shapley_dict[sample_idx][subset_group_idx]["iters"],
+                        np.ndarray,
+                    ):
+                        load_shapley_dict[sample_idx][subset_group_idx][
+                            "iters"
+                        ] = load_shapley_dict[sample_idx][subset_group_idx][
+                            "iters"
+                        ].tolist()
+
+                    shapley_output_list.append(
+                        load_shapley_dict[sample_idx][subset_group_idx]["values"][
+                            load_shapley_dict[sample_idx][subset_group_idx][
+                                "iters"
+                            ].index(masks_param)
+                        ]
+                    )
+                shapley_output_all.append(shapley_output_list)
+
+            if datasize_param is not None:
+                idx_random_list = (
+                    np.random.RandomState(seed=42)
+                    .permutation(list(range(len(dataset_explainer[dataset_key]))))
+                    .tolist()[:datasize_param]
+                )
+
+                dataset_explainer[dataset_key] = dataset_explainer[dataset_key].select(
+                    idx_random_list
+                )
+                shapley_output_all = [
+                    shapley_output_all[temp_idx] for temp_idx in idx_random_list
+                ]
 
             dataset_explainer[dataset_key] = MaskDataset(
                 dataset_explainer[dataset_key],

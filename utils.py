@@ -15,7 +15,7 @@ from torchvision.transforms import (
     Resize,
     ToTensor,
 )
-from tqdm.auto import tqdm
+from tqdm import tqdm
 from transformers.trainer_utils import get_last_checkpoint
 
 
@@ -504,6 +504,31 @@ def load_shapley(path, target_subset_size=None):
         for file in tqdm(file_list):
             subset_file_list = glob.glob(
                 str(Path(file) / f"shapley_output_{target_subset_size}_*.pt")
+            )
+            loaded_list = []
+            for subset_file in sorted(
+                subset_file_list,
+                key=lambda x: int(x.split("_")[-1].split(".")[0]),
+            ):
+                loaded = torch.load(subset_file)
+                loaded_list.append(loaded)
+            output_dict[int(file.split("/")[-1])] = loaded_list
+
+    return output_dict
+
+
+def load_attribution(path, attribution_name="shapley", target_subset_size=None):
+    file_list = glob.glob(str(Path(path) / "[0-9]*"))
+    output_dict = {}
+    if target_subset_size is None:
+        for file in tqdm(file_list):
+            loaded = torch.load(Path(file) / f"{attribution_name}_output.pt")
+
+            output_dict[int(file.split("/")[-1])] = loaded
+    else:
+        for file in tqdm(file_list):
+            subset_file_list = glob.glob(
+                str(Path(file) / f"{attribution_name}_output_{target_subset_size}_*.pt")
             )
             loaded_list = []
             for subset_file in sorted(

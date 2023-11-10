@@ -72,7 +72,6 @@ def ShapleyRegressionPrecomputed(
     detect_convergence=True,
     thresh=0.01,
     n_samples=None,
-    paired_sampling=True,
     return_all=False,
     min_variance_samples=None,
     variance_batches=None,

@@ -1,6 +1,5 @@
 # Evaluate surrogate model 
 
-
 ## surrogate evaluate (train set)
 
 CUDA_VISIBLE_DEVICES=4,5,6,7 \
@@ -29,10 +28,27 @@ python calculate_feature_attribution_using_extracted.py \
 --num_players 196 \
 --target_subset_size 512
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_surrogate_shapley_eval_train_regression \
-python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_shapley_eval_train_regression.json # why do we do this?
+python calculate_feature_attribution_using_extracted.py \
+--input_path logs/vitbase_imagenette_surrogate_shapley_eval_train/extract_output/train \
+--batch_size 512 \
+--normalize_function softmax \
+--num_players 196 \
+--target_subset_size 2440
+
+python calculate_feature_attribution_using_extracted.py \
+--input_path logs/vitbase_imagenette_surrogate_shapley_eval_train/extract_output/train \
+--batch_size 512 \
+--normalize_function softmax \
+--num_players 196 \
+--target_subset_size 2330
+
+python calculate_feature_attribution_using_extracted.py \
+--input_path logs/vitbase_imagenette_surrogate_shapley_eval_train/extract_output/train \
+--batch_size 512 \
+--normalize_function softmax \
+--num_players 196 \
+--target_subset_size 2257
+
 
 
 ## surrogate evaluate (train set - antithetical)
@@ -44,6 +60,12 @@ python calculate_feature_attribution_using_extracted.py \
 --num_players 196
 
 ### for evaluation
+
+CUDA_VISIBLE_DEVICES=5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_surrogate_shapley_eval_train_regression \
+python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_shapley_eval_train_regression.json # why do we do this?
+
 CUDA_VISIBLE_DEVICES=5,6,7 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_shapley_eval_train_regression_antithetical \
@@ -68,7 +90,7 @@ python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_sha
 
 ## surrogate evaluate (train set - SGD-Shapley)
 
-CUDA_VISIBLE_DEVICES=0,2,3 \
+CUDA_VISIBLE_DEVICES=4,5,6 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_shapley_eval_train_SGD_antithetical \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_shapley_eval_train_SGD_antithetical.json
@@ -101,6 +123,20 @@ python calculate_feature_attribution_using_extracted.py \
 --num_players 196 \
 --target_subset_size 512
 
+python calculate_feature_attribution_using_extracted.py \
+--input_path logs/vitbase_imagenette_surrogate_shapley_eval_validation/extract_output/validation \
+--batch_size 512 \
+--normalize_function softmax \
+--num_players 196 \
+--target_subset_size 2330
+
+python calculate_feature_attribution_using_extracted.py \
+--input_path logs/vitbase_imagenette_surrogate_shapley_eval_validation/extract_output/validation \
+--batch_size 512 \
+--normalize_function softmax \
+--num_players 196 \
+--target_subset_size 2257
+
 ## surrogate evaluate (validation set - antithetical)
 
 python calculate_feature_attribution_using_extracted.py \
@@ -129,7 +165,7 @@ python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_sha
 
 ## surrogate evaluate (validation set - SGD-Shapley)
 
-CUDA_VISIBLE_DEVICES=0,2,3 \
+CUDA_VISIBLE_DEVICES=4,5,6 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_shapley_eval_validation_SGD_antithetical \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_shapley_eval_validation_SGD_antithetical.json
@@ -217,6 +253,60 @@ WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_3072 \
 python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_3072.json
 
+
+
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_250 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_250.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_500 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_500.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_1000 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_1000.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_2000 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_2000.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_5000 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2330_numtrain_5000.json
+
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_250 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_250.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_500 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_500.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_1000 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_1000.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_2000 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_2000.json
+
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+WANDB_PROJECT=xai-amortization \
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_5000 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_5000.json
+
 ## train explainer (regression-AO) regression newsample with 512 subset size
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
@@ -299,17 +389,19 @@ python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_per
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
 WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_shapley_regexplainer_SGD_antithetical_upfront_196 \
-python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_SGD_antithetical_upfront_196.json
+WANDB_NAME=vitbase_imagenette_shapley_regexplainer_SGD_antithetical_upfront_9986 \
+python train_regexplainer.py configs/vitbase_imagenette_shapley_regexplainer_SGD_antithetical_upfront_9986.json
 
 # flops
-CUDA_VISIBLE_DEVICES=0 \
+CUDA_VISIBLE_DEVICES=7 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_shapley_eval_train_regression_antithetical_flops \
-python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_shapley_eval_train_regression_antithetical_flops.json
+dlprof --mode pytorch python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_shapley_eval_train_regression_antithetical_flops.json
 
 
-171.61 M = 100% Params, 22.02 TMACs = 100% MACs, 1.9 s = 100% latency, 23.18 TFLOPS
+dlprof --mode pytorch --force=true python python untitled.py
+nsys profile -f true -o net --export sqlite python python untitled.py
+
 # fp16
 # gradient_accumulation_steps=2
 

@@ -48,6 +48,7 @@ from transformers.utils.versions import require_version
 from arguments import ClassifierArguments, DataTrainingArguments, SurrogateArguments
 from feature_attribution_methods import (
     BanzhafRegression,
+    BanzhafSampling,
     ShapleyRegression,
     ShapleySampling,
     ShapleySGD,
@@ -113,6 +114,13 @@ class OtherArguments:
     )
 
     banzhaf_regression: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Extract output from the model. If None, will not extract output with N masks."
+        },
+    )
+
+    banzhaf_sampling: Optional[str] = field(
         default=None,
         metadata={
             "help": "Extract output from the model. If None, will not extract output with N masks."
@@ -412,7 +420,7 @@ def main():
             for sample_idx in tqdm(
                 np.random.RandomState(seed=42)
                 .permutation(list(range(len(dataset_shapley_regression[dataset_key]))))
-                .tolist()[:]
+                .tolist()[6:]
             ):
                 print(sample_idx)
 
@@ -523,7 +531,7 @@ def main():
             #     list(range(len(dataset_shapley_SGD[dataset_key])))
             # ):
             for sample_idx in tqdm(
-                list(range(len(dataset_shapley_SGD[dataset_key])))[1420:]
+                list(range(len(dataset_shapley_SGD[dataset_key])))[:]
             ):
 
                 class SampleDataset:
@@ -807,6 +815,121 @@ def main():
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
                 torch.save(obj=tracking_dict, f=save_path)
+
+    if other_args.banzhaf_sampling:
+        if (
+            isinstance(other_args.banzhaf_sampling, str)
+            and "," in other_args.banzhaf_sampling
+        ):
+            banzhaf_sampling_key = {
+                "train": int(other_args.banzhaf_sampling.split(",")[0]),
+                "validation": int(other_args.banzhaf_sampling.split(",")[1]),
+                "test": int(other_args.banzhaf_sampling.split(",")[2]),
+            }
+        else:
+            banzhaf_sampling_key = {
+                "train": int(other_args.banzhaf_sampling),
+                "validation": int(other_args.banzhaf_sampling),
+                "test": int(other_args.banzhaf_sampling),
+            }
+
+        dataset_banzhaf_sampling = copy.deepcopy(dataset_original)
+        dataset_banzhaf_sampling = configure_dataset(
+            dataset=dataset_banzhaf_sampling,
+            image_processor=surrogate_image_processor,
+            training_args=training_args,
+            data_args=data_args,
+            train_augmentation=False,
+            validation_augmentation=False,
+            test_augmentation=False,
+            logger=logger,
+        )
+        log_dataset(dataset=dataset_banzhaf_sampling, logger=logger)
+
+        for dataset_key in dataset_banzhaf_sampling.keys():
+            if banzhaf_sampling_key[dataset_key] == 0:
+                continue
+            from scipy.special import softmax
+
+            for sample_idx in tqdm(
+                np.random.RandomState(seed=42)
+                .permutation(list(range(len(dataset_banzhaf_sampling[dataset_key]))))
+                .tolist()[13:]
+            ):
+                print(sample_idx)
+
+                class SampleDataset:
+                    def __init__(self, dataset, sample_idx, masks_list):
+                        self.dataset = dataset
+                        self.sample_idx = sample_idx
+                        self.masks_list = masks_list
+
+                    def __getitem__(self, idx):
+                        item = self.dataset[self.sample_idx]
+                        item["masks"] = self.masks_list[idx]
+                        return item
+
+                    def __len__(self):
+                        return len(self.masks_list)
+
+                func = lambda x: softmax(
+                    surrogate_trainer.predict(
+                        SampleDataset(
+                            dataset=dataset_banzhaf_sampling[dataset_key],
+                            sample_idx=sample_idx,
+                            masks_list=x,
+                        ),
+                    ).predictions[0],
+                    axis=2,
+                )
+                if other_args.target_subset_size is None:
+                    _, tracking_dict = BanzhafSampling(
+                        surrogate=func,
+                        num_players=196,
+                        num_subsets=banzhaf_sampling_key[dataset_key],
+                        antithetical=other_args.antithetical_sampling,
+                        return_all=True,
+                    )
+
+                    save_path = os.path.join(
+                        training_args.output_dir,
+                        "extract_output",
+                        dataset_key,
+                        str(sample_idx),
+                        f"banzhaf_output.pt",
+                    )
+                    # make dir
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+                    torch.save(obj=tracking_dict, f=save_path)
+                else:
+                    for subset_group_idx in range(
+                        banzhaf_sampling_key[dataset_key]
+                        // other_args.target_subset_size
+                    ):
+                        (
+                            _,
+                            tracking_dict,
+                        ) = BanzhafSampling(
+                            surrogate=func,
+                            num_players=196,
+                            num_subsets=other_args.target_subset_size,
+                            antithetical=other_args.antithetical_sampling,
+                            return_all=True,
+                        )
+
+                        save_path = os.path.join(
+                            training_args.output_dir,
+                            "extract_output",
+                            dataset_key,
+                            str(sample_idx),
+                            f"banzhaf_output_{other_args.target_subset_size}_{subset_group_idx}.pt",
+                        )
+
+                        # make dir
+                        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+                        torch.save(obj=tracking_dict, f=save_path)
 
 
 if __name__ == "__main__":

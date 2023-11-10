@@ -492,6 +492,140 @@ def calculate_result_banzhaf(A, b, total):
     return values
 
 
+def BanzhafSampling(
+    surrogate,
+    num_players,
+    num_subsets=512,
+    return_interval=500,
+    antithetical=False,
+    return_all=False,
+):
+    if antithetical:
+        masks = (np.random.rand(num_subsets // 2, num_players) > 0.5).astype("int")
+        masks = [j for mask in masks for j in [mask, 1 - mask]]
+        masks = np.array(masks)
+    else:
+        masks = (np.random.rand(num_subsets, num_players) > 0.5).astype("int")
+
+    S_list = [np.expand_dims(S_.copy(), axis=0) for S_ in masks]
+
+    S_list = np.array(S_list)[:, 0, :]
+    # S_list = [S_list[4 * j : 4 * (j + 1)] for j in range(int(np.ceil(len(S_list) / 4)))]
+    S_list = [S_list[4 * j : 4 * (j + 1)] for j in range(int(np.ceil(len(S_list) / 4)))]
+
+    surrogate_output = surrogate(S_list)
+
+    # surrogate_output = surrogate(S_list)
+    surrogate_output = surrogate_output.reshape(num_subsets, surrogate_output.shape[-1])
+
+    interval_array = np.arange(return_interval, num_subsets + 1, return_interval)
+
+    values = []
+
+    for i in tqdm(range(num_players)):
+        surrogate_output_included = surrogate_output[:, :][masks[:, i] == 1]
+        surrogate_output_notincluded = surrogate_output[:, :][masks[:, i] == 0]
+
+        surrogate_output_included_sum = np.cumsum(surrogate_output_included, axis=0)
+        surrogate_output_notincluded_sum = np.cumsum(
+            surrogate_output_notincluded, axis=0
+        )
+
+        surrogate_output_included_mean = (
+            surrogate_output_included_sum
+            / np.arange(1, surrogate_output_included_sum.shape[0] + 1)[:, np.newaxis]
+        )
+        surrogate_output_notincluded_mean = (
+            surrogate_output_notincluded_sum
+            / np.arange(1, surrogate_output_notincluded_sum.shape[0] + 1)[:, np.newaxis]
+        )
+
+        included_interval_idx = (
+            surrogate_output_included_mean.shape[0]
+            - 1
+            - np.argmax(
+                (
+                    np.arange(1, num_subsets + 1)[masks[:, i] == 1]
+                    <= interval_array[:, np.newaxis]
+                )[:, ::-1],
+                axis=1,
+            )
+        )
+        notincluded_interval_idx = (
+            surrogate_output_notincluded_mean.shape[0]
+            - 1
+            - np.argmax(
+                (
+                    np.arange(1, num_subsets + 1)[masks[:, i] == 0]
+                    <= interval_array[:, np.newaxis]
+                )[:, ::-1],
+                axis=1,
+            )
+        )
+
+        assert len(included_interval_idx) == len(notincluded_interval_idx)
+        assert np.all(np.diff(included_interval_idx) >= 0)
+        assert np.all(np.diff(notincluded_interval_idx) >= 0)
+
+        values.append(
+            surrogate_output_included_mean[included_interval_idx]
+            - surrogate_output_notincluded_mean[notincluded_interval_idx]
+        )
+
+    values = np.array(values)
+    val_list = [values[:, i, :] for i in range(values.shape[1])]
+    iters_list = interval_array.tolist()
+
+    tracking_dict = {"values": val_list, "iters": iters_list}
+
+    return AttributionValues(values, 0), tracking_dict
+
+    # surrogate_output = surrogate(S_list)
+
+    # # surrogate_output = surrogate(S_list)
+    # surrogate_output = surrogate_output.reshape(num_subsets, surrogate_output.shape[-1])
+
+    # for num_subsets_select in tqdm(
+    #     range(return_interval, num_subsets + 1, return_interval)
+    # ):
+    #     values = []
+    #     for i in range(num_players):
+    #         surrogate_output_included = surrogate_output[:num_subsets_select, :][
+    #             masks[:num_subsets_select, i] == 1
+    #         ]
+
+    #         surrogate_output_included_mean = (
+    #             np.mean(surrogate_output_included, axis=0)
+    #             if len(surrogate_output_included) > 0
+    #             else np.zeros(surrogate_output.shape[-1])
+    #         )
+
+    #         surrogate_output_not_included = surrogate_output[:num_subsets_select, :][
+    #             masks[:num_subsets_select, i] == 0
+    #         ]
+    #         surrogate_output_not_included_mean = (
+    #             np.mean(surrogate_output_not_included, axis=0)
+    #             if len(surrogate_output_not_included) > 0
+    #             else np.zeros(surrogate_output.shape[-1])
+    #         )
+    #         values.append(
+    #             surrogate_output_included_mean - surrogate_output_not_included_mean
+    #         )
+    #     values = np.array(values)
+
+    #     if return_all:
+    #         val_list.append(np.copy(values))
+    #         iters_list.append(num_subsets_select)
+
+    # if return_all:
+    #     # Dictionary for progress tracking.
+    #     tracking_dict = {"values": val_list, "iters": iters_list}
+
+    #     return AttributionValues(values, 0), tracking_dict
+    # else:
+    #     return AttributionValues(values, 0)
+
+
 def BanzhafRegression(
     surrogate,
     num_players,
