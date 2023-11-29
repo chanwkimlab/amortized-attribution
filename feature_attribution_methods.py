@@ -518,7 +518,10 @@ def BanzhafSampling(
     # surrogate_output = surrogate(S_list)
     surrogate_output = surrogate_output.reshape(num_subsets, surrogate_output.shape[-1])
 
-    interval_array = np.arange(return_interval, num_subsets + 1, return_interval)
+    interval_array = np.array(
+        list(range(100, return_interval, 100))
+        + list(range(return_interval, num_subsets + 1, return_interval))
+    )
 
     values = []
 

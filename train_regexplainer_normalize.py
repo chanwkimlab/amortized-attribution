@@ -45,8 +45,8 @@ from transformers.utils.versions import require_version
 
 from arguments import DataTrainingArguments, ExplainerArguments, SurrogateArguments
 from models import (
-    RegExplainerForImageClassification,
-    RegExplainerForImageClassificationConfig,
+    RegExplainerNormalizeForImageClassification,
+    RegExplainerNormalizeForImageClassificationConfig,
     SurrogateForImageClassificationConfig,
 )
 from utils import (
@@ -250,9 +250,9 @@ def main():
         json.loads(
             open(f"{explainer_args.explainer_model_name_or_path}/config.json").read()
         )["architectures"][0]
-        == "RegExplainerForImageClassification"
+        == "RegExplainerNormalizeForImageClassification"
     ):
-        explainer = RegExplainerForImageClassification.from_pretrained(
+        explainer = RegExplainerNormalizeForImageClassification.from_pretrained(
             explainer_args.explainer_model_name_or_path,
             from_tf=bool(".ckpt" in explainer_args.explainer_model_name_or_path),
             config=explainer_config,
@@ -285,7 +285,7 @@ def main():
             surrogate_ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
         )
 
-        explainer_for_image_classification_config = RegExplainerForImageClassificationConfig(
+        explainer_for_image_classification_config = RegExplainerNormalizeForImageClassificationConfig(
             surrogate_pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
             surrogate_config=surrogate_for_image_classification_config,
             surrogate_from_tf=bool(
@@ -306,7 +306,7 @@ def main():
             explainer_ignore_mismatched_sizes=explainer_args.explainer_ignore_mismatched_sizes,
         )
 
-        explainer = RegExplainerForImageClassification(
+        explainer = RegExplainerNormalizeForImageClassification(
             config=explainer_for_image_classification_config,
         )
     explainer_image_processor = AutoImageProcessor.from_pretrained(
@@ -369,6 +369,7 @@ def main():
                     load_shapley_dict[sample_idx]["iters"] = load_shapley_dict[
                         sample_idx
                     ]["iters"].tolist()
+
                 shapley_output_all.append(
                     [
                         load_shapley_dict[sample_idx]["values"][

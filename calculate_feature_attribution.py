@@ -849,13 +849,32 @@ def main():
         for dataset_key in dataset_banzhaf_sampling.keys():
             if banzhaf_sampling_key[dataset_key] == 0:
                 continue
+
             from scipy.special import softmax
 
-            for sample_idx in tqdm(
-                np.random.RandomState(seed=42)
-                .permutation(list(range(len(dataset_banzhaf_sampling[dataset_key]))))
-                .tolist()[13:]
-            ):
+            idx_list = [
+                sample_idx
+                for sample_idx in range(len(dataset_banzhaf_sampling[dataset_key]))
+                if not os.path.exists(
+                    os.path.join(
+                        training_args.output_dir,
+                        "extract_output",
+                        dataset_key,
+                        str(sample_idx),
+                        f"banzhaf_output.pt",
+                    )
+                )
+            ]
+
+            print(idx_list)
+            # ddd
+
+            # for sample_idx in tqdm(
+            #     np.random.RandomState(seed=42)
+            #     .permutation(list(range(len(dataset_banzhaf_sampling[dataset_key]))))
+            #     .tolist()[idx : idx + 1]
+            # ):
+            for sample_idx in tqdm(idx_list):
                 print(sample_idx)
 
                 class SampleDataset:
