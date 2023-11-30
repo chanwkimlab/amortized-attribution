@@ -523,6 +523,35 @@ def BanzhafSampling(
         + list(range(return_interval, num_subsets + 1, return_interval))
     )
 
+    # Less efficient implementation.
+    # values = []
+    # for interval in interval_array:
+    #     value = []
+    #     for i in tqdm(range(num_players)):
+    #         surrogate_output_included = surrogate_output[:interval, :][
+    #             masks[:interval][:, i] == 1
+    #         ]
+    #         surrogate_output_notincluded = surrogate_output[:interval, :][
+    #             masks[:interval][:, i] == 0
+    #         ]
+
+    #         surrogate_output_included_mean = (
+    #             np.mean(surrogate_output_included, axis=0)
+    #             if len(surrogate_output_included) > 0
+    #             else np.zeros(surrogate_output.shape[-1])
+    #         )
+
+    #         surrogate_output_notincluded_mean = (
+    #             np.mean(surrogate_output_notincluded, axis=0)
+    #             if len(surrogate_output_notincluded) > 0
+    #             else np.zeros(surrogate_output.shape[-1])
+    #         )
+
+    #         value.append(
+    #             surrogate_output_included_mean - surrogate_output_notincluded_mean
+    #         )
+    #     values.append(np.array(value))
+
     values = []
 
     for i in tqdm(range(num_players)):
@@ -575,7 +604,7 @@ def BanzhafSampling(
             - surrogate_output_notincluded_mean[notincluded_interval_idx]
         )
 
-    values = np.array(values)
+    values = np.array(values)  # num_players x num_intervals x num_outputs
     val_list = [values[:, i, :] for i in range(values.shape[1])]
     iters_list = interval_array.tolist()
 
