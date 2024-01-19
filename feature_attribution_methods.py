@@ -1,4 +1,5 @@
 import numpy as np
+from sklearn.linear_model import LinearRegression
 from tqdm.auto import tqdm
 
 
@@ -386,10 +387,13 @@ def ShapleyRegression(
     num_included = np.random.choice(num_players - 1, size=num_subsets, p=weights) + 1
     for masks_idx, (row, num) in enumerate(zip(masks, num_included)):
         if paired_sampling and masks_idx % 2 == 1:
-            row = 1 - masks[masks_idx - 1]
+            masks[masks_idx] = 1 - masks[masks_idx - 1]
         else:
             inds = np.random.choice(num_players, size=num, replace=False)
             row[inds] = 1
+    # import ipdb
+
+    # ipdb.set_trace()
     masks_list = [np.expand_dims(masks_.copy(), axis=0) for masks_ in masks]
 
     masks_list = np.array(masks_list)[:, 0, :]
@@ -472,26 +476,6 @@ def ShapleyRegression(
         return AttributionValues(values, std), ratio
 
 
-def calculate_result_banzhaf(A, b, total):
-    """Calculate the regression coefficients."""
-    num_players = A.shape[1]
-    try:
-        if len(b.shape) == 2:
-            A_inv_one = np.linalg.solve(A, np.ones((num_players, 1)))
-        else:
-            A_inv_one = np.linalg.solve(A, np.ones(num_players))
-        A_inv_vec = np.linalg.solve(A, b)
-        values = A_inv_vec - A_inv_one * (
-            np.sum(A_inv_vec, axis=0, keepdims=True) - total
-        ) / np.sum(A_inv_one)
-    except np.linalg.LinAlgError:
-        raise ValueError(
-            "singular matrix inversion. Consider using larger " "variance_batches"
-        )
-
-    return values
-
-
 def BanzhafSampling(
     surrogate,
     num_players,
@@ -518,10 +502,17 @@ def BanzhafSampling(
     # surrogate_output = surrogate(S_list)
     surrogate_output = surrogate_output.reshape(num_subsets, surrogate_output.shape[-1])
 
-    interval_array = np.array(
-        list(range(100, return_interval, 100))
-        + list(range(return_interval, num_subsets + 1, return_interval))
-    )
+    if num_subsets > 100000:
+        interval_array = np.array(list(range(10000, num_subsets + 1, 10000)))
+    elif num_subsets > 1000:
+        interval_array = np.array(
+            list(range(100, return_interval, 100))
+            + list(range(return_interval, num_subsets + 1, return_interval))
+        )
+    else:
+        interval_array = np.array(
+            [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500]
+        )
 
     # Less efficient implementation.
     # values = []
@@ -567,9 +558,22 @@ def BanzhafSampling(
             surrogate_output_included_sum
             / np.arange(1, surrogate_output_included_sum.shape[0] + 1)[:, np.newaxis]
         )
+        surrogate_output_included_mean = np.vstack(
+            [
+                np.zeros((1, surrogate_output_included_sum.shape[1])),
+                surrogate_output_included_mean,
+            ]
+        )
         surrogate_output_notincluded_mean = (
             surrogate_output_notincluded_sum
             / np.arange(1, surrogate_output_notincluded_sum.shape[0] + 1)[:, np.newaxis]
+        )
+
+        surrogate_output_notincluded_mean = np.vstack(
+            [
+                np.zeros((1, surrogate_output_notincluded_sum.shape[1])),
+                surrogate_output_notincluded_mean,
+            ]
         )
 
         included_interval_idx = (
@@ -583,6 +587,15 @@ def BanzhafSampling(
                 axis=1,
             )
         )
+        included_interval_idx[
+            (
+                ~(
+                    np.arange(1, num_subsets + 1)[masks[:, i] == 1]
+                    <= interval_array[:, np.newaxis]
+                ).any(axis=1)
+            )
+        ] = 0
+
         notincluded_interval_idx = (
             surrogate_output_notincluded_mean.shape[0]
             - 1
@@ -594,6 +607,14 @@ def BanzhafSampling(
                 axis=1,
             )
         )
+        notincluded_interval_idx[
+            (
+                ~(
+                    np.arange(1, num_subsets + 1)[masks[:, i] == 0]
+                    <= interval_array[:, np.newaxis]
+                ).any(axis=1)
+            )
+        ] = 0
 
         assert len(included_interval_idx) == len(notincluded_interval_idx)
         assert np.all(np.diff(included_interval_idx) >= 0)
@@ -658,149 +679,102 @@ def BanzhafSampling(
     #     return AttributionValues(values, 0)
 
 
-def BanzhafRegression(
+def calculate_result_lime(A, b, total):
+    """Calculate the regression coefficients."""
+    num_players = A.shape[1]
+    try:
+        if len(b.shape) == 2:
+            A_inv_one = np.linalg.solve(A, np.ones((num_players, 1)))
+        else:
+            A_inv_one = np.linalg.solve(A, np.ones(num_players))
+        A_inv_vec = np.linalg.solve(A, b)
+        values = A_inv_vec - A_inv_one * (
+            np.sum(A_inv_vec, axis=0, keepdims=True) - total
+        ) / np.sum(A_inv_one)
+    except np.linalg.LinAlgError:
+        raise ValueError(
+            "singular matrix inversion. Consider using larger " "variance_batches"
+        )
+
+    return values
+
+
+def LIMERegression(
     surrogate,
     num_players,
-    num_subsets,
-    batch_size=512,
-    detect_convergence=True,
-    thresh=0.01,
-    paired_sampling=True,
+    num_subsets=512,
+    return_interval=500,
+    antithetical=False,
     return_all=False,
-    min_variance_samples=None,
-    variance_batches=None,
-    verbose=False,
 ):
-    if min_variance_samples is None:
-        min_variance_samples = default_min_variance_samples()
+    if antithetical:
+        masks = (np.random.rand(num_subsets // 2, num_players) > 0.5).astype("int")
+        masks = [j for mask in masks for j in [mask, 1 - mask]]
+        masks = np.array(masks)
     else:
-        assert isinstance(min_variance_samples, int)
-        assert min_variance_samples > 1
+        masks = (np.random.rand(num_subsets, num_players) > 0.5).astype("int")
 
-    if variance_batches is None:
-        variance_batches = default_variance_batches(num_players, batch_size)
-    else:
-        assert isinstance(variance_batches, int)
-        assert variance_batches >= 1
+    S_list = [np.expand_dims(S_.copy(), axis=0) for S_ in masks]
 
-    import ipdb
+    S_list = np.array(S_list)[:, 0, :]
+    # S_list = [S_list[4 * j : 4 * (j + 1)] for j in range(int(np.ceil(len(S_list) / 4)))]
+    S_list = [S_list[4 * j : 4 * (j + 1)] for j in range(int(np.ceil(len(S_list) / 4)))]
 
-    ipdb.set_trace()
-    # Weighting kernel (probability of each subset size).
-    weights = np.arange(1, num_players)
-    weights = 1 / (weights * (num_players - weights))
-    weights = weights / np.sum(weights)
+    surrogate_output = surrogate(S_list)
 
-    # Calculate null and grand coalitions for constraints.
-    null = surrogate([np.zeros((1, num_players), dtype=int)])[0][0]
-    grand = surrogate([np.ones((1, num_players), dtype=int)])[0][0]
-
-    # Calculate difference between grand and null coalitions.
-    total = grand - null
-
-    # Setup.
-    n = 0
-    b = 0
-    A = 0
-    estimate_list = []
-
-    # For variance estimation.
-    A_sample_list = []
-    b_sample_list = []
-
-    # For tracking progress.
-    var = np.nan * np.ones(num_players)
-    if return_all:
-        N_list = []
-        std_list = []
-        val_list = []
-        iters = []
-
-    masks = np.zeros((num_subsets, num_players), dtype=int)
-    num_included = np.random.choice(num_players - 1, size=num_subsets, p=weights) + 1
-    for masks_idx, (row, num) in enumerate(zip(masks, num_included)):
-        if paired_sampling and masks_idx % 2 == 1:
-            row = 1 - masks[masks_idx - 1]
-        else:
-            inds = np.random.choice(num_players, size=num, replace=False)
-            row[inds] = 1
-    masks_list = [np.expand_dims(masks_.copy(), axis=0) for masks_ in masks]
-
-    masks_list = np.array(masks_list)[:, 0, :]
-    masks_list = [
-        masks_list[4 * j : 4 * (j + 1)]
-        for j in range(int(np.ceil(len(masks_list) / 4)))
-    ]
-    surrogate_output = surrogate(masks_list)
-    # surrogate_output = surrogate(masks_list)
+    # surrogate_output = surrogate(S_list)
     surrogate_output = surrogate_output.reshape(num_subsets, surrogate_output.shape[-1])
 
-    # Begin sampling.
-    for it in range(int(np.ceil(num_subsets / batch_size))):
-        # Sample subsets.
-        S = masks[batch_size * it : batch_size * (it + 1)]
-        game_S = surrogate_output[batch_size * it : batch_size * (it + 1)]
-
-        # Single sample.
-        A_sample = np.matmul(
-            S[:, :, np.newaxis].astype(float), S[:, np.newaxis, :].astype(float)
+    if num_subsets > 10000:
+        interval_array = np.array(list(range(100000, num_subsets + 1, 100000)))
+    elif num_subsets > 1000:
+        interval_array = np.array(
+            list(range(100, return_interval, 100))
+            + list(range(return_interval, num_subsets + 1, return_interval))
         )
-        b_sample = (S.astype(float).T * (game_S - null)[:, np.newaxis].T).T
-
-        # Welford's algorithm.
-        n += len(S)
-        iters.append(n)
-        b += np.sum(b_sample - b, axis=0) / n
-        A += np.sum(A_sample - A, axis=0) / n
-
-        # Calculate progress.
-        values = calculate_result_shapley(A, b, total)
-        A_sample_list.append(A_sample)
-        b_sample_list.append(b_sample)
-        if len(A_sample_list) == variance_batches:
-            # Aggregate samples for intermediate estimate.
-            A_sample = np.concatenate(A_sample_list, axis=0).mean(axis=0)
-            b_sample = np.concatenate(b_sample_list, axis=0).mean(axis=0)
-            A_sample_list = []
-            b_sample_list = []
-
-            # Add new estimate.
-            estimate_list.append(calculate_result_shapley(A_sample, b_sample, total))
-
-            # Estimate current var.
-            if len(estimate_list) >= min_variance_samples:
-                var = np.array(estimate_list).var(axis=0)
-
-        # Convergence ratio.
-        std = np.sqrt(var * variance_batches / (it + 1))
-        ratio = np.max(np.max(std, axis=0) / (values.max(axis=0) - values.min(axis=0)))
-
-        # Print progress message.
-        if verbose:
-            if detect_convergence:
-                print(f"StdDev Ratio = {ratio:.4f} (Converge at {thresh:.4f})")
-            else:
-                print(f"StdDev Ratio = {ratio:.4f}")
-
-        # Forecast number of iterations required.
-        if detect_convergence:
-            N_est = (it + 1) * (ratio / thresh) ** 2
-
-        # Save intermediate quantities.
-        if return_all:
-            val_list.append(values)
-            std_list.append(std)
-            if detect_convergence:
-                N_list.append(N_est)
-
-    # Return results.
-    if return_all:
-        # Dictionary for progress tracking.
-        assert len(iters) == len(val_list)
-        tracking_dict = {"values": val_list, "std": std_list, "iters": iters}
-        if detect_convergence:
-            tracking_dict["N_est"] = N_list
-
-        return AttributionValues(values, std), tracking_dict, ratio
     else:
-        return AttributionValues(values, std), ratio
+        interval_array = np.array(
+            [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500]
+        )
+
+    weights = np.exp(-((1 - np.sqrt(masks.sum(axis=1) / 196)) ** 2) / 0.25)
+    masks_with_intercept = np.hstack([np.ones((masks.shape[0], 1)), masks])
+    W_masks = (
+        masks_with_intercept * weights[:, np.newaxis]
+    )  # (num_subsets, 1+num_players)
+
+    values = []
+    for interval in tqdm(interval_array):
+        surrogate_output_ = surrogate_output[:interval]
+        masks_with_intercept_ = masks_with_intercept[:interval]
+        # weights_ = weights[:interval]
+        # W_ = np.diag(weights_)
+        # # (196+1, 100) @ (100,100) @ (100, 196+1) = (100+1, 100+1)
+        # beta = np.linalg.solve(
+        #     masks_with_intercept_.T @ W_ @ masks_with_intercept_,
+        #     masks_with_intercept_.T @ W_ @ surrogate_output_,
+        # )
+        W_masks_ = W_masks[:interval]
+        # (196+1, 100) @ (100,100) @ (100, 196+1) = (100+1, 100+1)
+        beta = np.linalg.solve(
+            W_masks_.T @ masks_with_intercept_,
+            W_masks_.T @ surrogate_output_,
+        )
+        attribution, intercept = beta[1:], beta[0]
+        values.append(attribution)
+
+        # x = (
+        #     LinearRegression()
+        #     .fit(
+        #         masks[:interval],
+        #         surrogate_output[:interval],
+        #         sample_weight=weights[:interval],
+        #     )
+        #     .coef_
+        # )
+
+        # print(interval, np.isclose(values, x.T), values - x.T)
+
+    tracking_dict = {"values": values, "iters": interval_array.tolist()}
+
+    return AttributionValues(values, 0), tracking_dict

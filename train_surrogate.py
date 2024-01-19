@@ -92,7 +92,7 @@ class OtherArguments:
         },
     )
 
-    extract_output_banzhaf: Optional[str] = field(
+    extract_output_binomial: Optional[str] = field(
         default=None,
         metadata={
             "help": "Extract output from the model. If None, will not extract output with N masks."
@@ -500,21 +500,21 @@ def main():
                         save_path,
                     )
 
-    if other_args.extract_output_banzhaf:
+    if other_args.extract_output_binomial:
         if (
-            isinstance(other_args.extract_output_banzhaf, str)
-            and "," in other_args.extract_output_banzhaf
+            isinstance(other_args.extract_output_binomial, str)
+            and "," in other_args.extract_output_binomial
         ):
-            extract_output_banzhaf_key = {
-                "train": int(other_args.extract_output_banzhaf.split(",")[0]),
-                "validation": int(other_args.extract_output_banzhaf.split(",")[1]),
-                "test": int(other_args.extract_output_banzhaf.split(",")[2]),
+            extract_output_binomial_key = {
+                "train": int(other_args.extract_output_binomial.split(",")[0]),
+                "validation": int(other_args.extract_output_binomial.split(",")[1]),
+                "test": int(other_args.extract_output_binomial.split(",")[2]),
             }
         else:
-            extract_output_banzhaf_key = {
-                "train": int(other_args.extract_output_banzhaf),
-                "validation": int(other_args.extract_output_banzhaf),
-                "test": int(other_args.extract_output_banzhaf),
+            extract_output_binomial_key = {
+                "train": int(other_args.extract_output_binomial),
+                "validation": int(other_args.extract_output_binomial),
+                "test": int(other_args.extract_output_binomial),
             }
 
         dataset_extract = copy.deepcopy(dataset_original)
@@ -544,7 +544,7 @@ def main():
 
         log_dataset(dataset=dataset_extract, logger=logger)
         for dataset_key in dataset_extract.keys():
-            if extract_output_banzhaf_key[dataset_key] == 0:
+            if extract_output_binomial_key[dataset_key] == 0:
                 continue
             predict_output = surrogate_trainer.predict(dataset_extract[dataset_key])
             logger.info("Saving grand null output of the surrogate model")
@@ -572,7 +572,7 @@ def main():
                 num_features=196,
                 num_mask_samples=other_args.num_mask_samples,
                 paired_mask_samples=other_args.antithetical_sampling,
-                mode="banzhaf",
+                mode="binomial",
                 random_seed=training_args.seed,
             )
         log_dataset(dataset=dataset_extract, logger=logger)
@@ -581,7 +581,7 @@ def main():
             for idx in tqdm(
                 range(
                     (
-                        extract_output_banzhaf_key[dataset_key]
+                        extract_output_binomial_key[dataset_key]
                         + other_args.num_mask_samples
                         - 1
                     )
@@ -592,7 +592,7 @@ def main():
                     num_features=196,
                     num_mask_samples=other_args.num_mask_samples,
                     paired_mask_samples=other_args.antithetical_sampling,
-                    mode="banzhaf",
+                    mode="binomial",
                     random_seed=training_args.seed + idx,
                 )
 

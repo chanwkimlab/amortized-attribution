@@ -246,6 +246,38 @@ def ShapleyRegressionPrecomputed(
         return AttributionValues(values, std), ratio
 
 
+def LIMERegressionPrecomputed(masks, model_outputs, batch_size, num_players):
+    # interval_array = np.array(
+    #     [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500]
+    # )
+    assert len(masks) == len(model_outputs)
+    assert batch_size <= len(masks)
+    assert num_players == masks.shape[1]
+    interval_array = np.array(list(range(batch_size, len(masks), batch_size)))
+
+    weights = np.exp(-((1 - np.sqrt(masks.sum(axis=1) / 196)) ** 2) / 0.25)
+
+    masks_with_intercept = np.hstack([np.ones((masks.shape[0], 1)), masks])
+
+    values = []
+    for interval in tqdm(interval_array):
+        weights_ = weights[:interval]
+        masks_with_intercept_ = masks_with_intercept[:interval]
+        model_outputs_ = model_outputs[:interval]
+        W_ = np.diag(weights_)
+        # (196+1, 100) @ (100,100) @ (100, 196+1) = (196+1, 196+1)
+        beta = np.linalg.solve(
+            masks_with_intercept_.T @ W_ @ masks_with_intercept_,
+            masks_with_intercept_.T @ W_ @ model_outputs_,
+        )
+        attribution, intercept = beta[1:], beta[0]
+        values.append(attribution)
+
+    tracking_dict = {"values": values, "iters": interval_array.tolist()}
+
+    return AttributionValues(values, 0), tracking_dict, 0
+
+
 def get_args():
     """Parse the command line arguments."""
     parser = argparse.ArgumentParser(description="Process some inputs.")
@@ -281,6 +313,13 @@ def get_args():
         help="The target subset size",
     )
 
+    parser.add_argument(
+        "--attribution_name",
+        type=str,
+        required=True,
+        help="The name of the attribution method",
+    )
+
     return parser.parse_args()
 
 
@@ -296,6 +335,7 @@ if __name__ == "__main__":
         raise ValueError("Unsupported normalization function")
     num_players = args.num_players
     target_subset_size = args.target_subset_size
+    attribution_name = args.attribution_name
 
     sample_list = glob.glob(str(Path(input_path) / "[0-9]*"))
 
@@ -345,37 +385,12 @@ if __name__ == "__main__":
         ), f"Num of players mismatch {subsets.shape[1]} != {num_players}"
 
         if target_subset_size is None:
-            _, tracking_dict, ratio = ShapleyRegressionPrecomputed(
-                grand_value=grand_value,
-                null_value=null_value,
-                model_outputs=subsets_output,
-                masks=subsets,
-                batch_size=batch_size,
-                num_players=num_players,
-                variance_batches=2,
-                min_variance_samples=2,
-                return_all=True,
-                bar=False,
-            )
-
-            torch.save(
-                obj=tracking_dict, f=str(Path(sample_path) / "shapley_output.pt")
-            )
-        else:
-            for subset_group_idx in range(len(subsets_output) // target_subset_size):
+            if attribution_name == "shapley":
                 _, tracking_dict, ratio = ShapleyRegressionPrecomputed(
                     grand_value=grand_value,
                     null_value=null_value,
-                    model_outputs=subsets_output[
-                        target_subset_size
-                        * subset_group_idx : target_subset_size
-                        * (subset_group_idx + 1)
-                    ],
-                    masks=subsets[
-                        target_subset_size
-                        * subset_group_idx : target_subset_size
-                        * (subset_group_idx + 1)
-                    ],
+                    model_outputs=subsets_output,
+                    masks=subsets,
                     batch_size=batch_size,
                     num_players=num_players,
                     variance_batches=2,
@@ -383,12 +398,66 @@ if __name__ == "__main__":
                     return_all=True,
                     bar=False,
                 )
+            elif attribution_name == "lime":
+                _, tracking_dict, ratio = LIMERegressionPrecomputed(
+                    model_outputs=subsets_output,
+                    masks=subsets,
+                    batch_size=batch_size,
+                    num_players=num_players,
+                )
+            else:
+                raise ValueError(f"Unsupported attribution name {attribution_name}")
+
+            torch.save(
+                obj=tracking_dict,
+                f=str(Path(sample_path) / f"{attribution_name}_output.pt"),
+            )
+        else:
+            for subset_group_idx in range(len(subsets_output) // target_subset_size):
+                if attribution_name == "shapley":
+                    _, tracking_dict, ratio = ShapleyRegressionPrecomputed(
+                        grand_value=grand_value,
+                        null_value=null_value,
+                        model_outputs=subsets_output[
+                            target_subset_size
+                            * subset_group_idx : target_subset_size
+                            * (subset_group_idx + 1)
+                        ],
+                        masks=subsets[
+                            target_subset_size
+                            * subset_group_idx : target_subset_size
+                            * (subset_group_idx + 1)
+                        ],
+                        batch_size=batch_size,
+                        num_players=num_players,
+                        variance_batches=2,
+                        min_variance_samples=2,
+                        return_all=True,
+                        bar=False,
+                    )
+                elif attribution_name == "lime":
+                    _, tracking_dict, ratio = LIMERegressionPrecomputed(
+                        model_outputs=subsets_output[
+                            target_subset_size
+                            * subset_group_idx : target_subset_size
+                            * (subset_group_idx + 1)
+                        ],
+                        masks=subsets[
+                            target_subset_size
+                            * subset_group_idx : target_subset_size
+                            * (subset_group_idx + 1)
+                        ],
+                        batch_size=batch_size,
+                        num_players=num_players,
+                    )
+                else:
+                    raise ValueError(f"Unsupported attribution name {attribution_name}")
 
                 torch.save(
                     obj=tracking_dict,
                     f=str(
                         Path(sample_path)
-                        / f"shapley_output_{target_subset_size}_{subset_group_idx}.pt"
+                        / f"{attribution_name}_output_{target_subset_size}_{subset_group_idx}.pt"
                     ),
                 )
 

@@ -353,7 +353,7 @@ def main():
         if mask_mode.startswith("upfront"):
             masks_param = int(mask_mode.split(",")[1])
             # load_shapley_dict = load_shapley(cache_path)
-            load_shapley_dict = load_attribution(cache_path, attribution_name="banzhaf")
+            load_shapley_dict = load_attribution(cache_path, attribution_name="shapley")
 
             assert len(dataset_explainer[dataset_key]) == len(
                 load_shapley_dict

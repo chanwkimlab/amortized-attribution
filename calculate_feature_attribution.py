@@ -47,8 +47,8 @@ from transformers.utils.versions import require_version
 
 from arguments import ClassifierArguments, DataTrainingArguments, SurrogateArguments
 from feature_attribution_methods import (
-    BanzhafRegression,
     BanzhafSampling,
+    LIMERegression,
     ShapleyRegression,
     ShapleySampling,
     ShapleySGD,
@@ -121,6 +121,13 @@ class OtherArguments:
     )
 
     banzhaf_sampling: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Extract output from the model. If None, will not extract output with N masks."
+        },
+    )
+
+    lime_regression: Optional[str] = field(
         default=None,
         metadata={
             "help": "Extract output from the model. If None, will not extract output with N masks."
@@ -416,12 +423,24 @@ def main():
             # for sample_idx in tqdm(
             #     list(range(len(dataset_shapley_regression[dataset_key])))
             # ):
-            count_temp = 0
-            for sample_idx in tqdm(
-                np.random.RandomState(seed=42)
+
+            idx_list = [
+                sample_idx
+                for sample_idx in np.random.RandomState(seed=42)
                 .permutation(list(range(len(dataset_shapley_regression[dataset_key]))))
-                .tolist()[6:]
-            ):
+                .tolist()[:100][:70]
+                if not os.path.exists(
+                    os.path.join(
+                        training_args.output_dir,
+                        "extract_output",
+                        dataset_key,
+                        str(sample_idx),
+                        f"shapley_output.pt",
+                    )
+                )
+            ]
+
+            for sample_idx in tqdm(idx_list):
                 print(sample_idx)
 
                 class SampleDataset:
@@ -725,97 +744,6 @@ def main():
 
                         torch.save(obj=tracking_dict, f=save_path)
 
-    if other_args.banzhaf_regression:
-        if (
-            isinstance(other_args.banzhaf_regression, str)
-            and "," in other_args.banzhaf_regression
-        ):
-            banzhaf_regression_key = {
-                "train": int(other_args.banzhaf_regression.split(",")[0]),
-                "validation": int(other_args.banzhaf_regression.split(",")[1]),
-                "test": int(other_args.banzhaf_regression.split(",")[2]),
-            }
-        else:
-            banzhaf_regression_key = {
-                "train": int(other_args.banzhaf_regression),
-                "validation": int(other_args.banzhaf_regression),
-                "test": int(other_args.banzhaf_regression),
-            }
-        dataset_banzhaf_regression = copy.deepcopy(dataset_original)
-        dataset_banzhaf_regression = configure_dataset(
-            dataset=dataset_banzhaf_regression,
-            image_processor=surrogate_image_processor,
-            training_args=training_args,
-            data_args=data_args,
-            train_augmentation=False,
-            validation_augmentation=False,
-            test_augmentation=False,
-            logger=logger,
-        )
-        log_dataset(dataset=dataset_banzhaf_regression, logger=logger)
-        for dataset_key in dataset_banzhaf_regression.keys():
-            if banzhaf_regression_key[dataset_key] == 0:
-                continue
-            from scipy.special import softmax
-
-            # for sample_idx in tqdm(
-            #     list(range(len(dataset_banzhaf_regression[dataset_key])))
-            # ):
-            for sample_idx in tqdm(
-                np.random.RandomState(seed=42)
-                .permutation(list(range(len(dataset_banzhaf_regression[dataset_key]))))
-                .tolist()
-            ):
-                print(sample_idx)
-
-                class SampleDataset:
-                    def __init__(self, dataset, sample_idx, masks_list):
-                        self.dataset = dataset
-                        self.sample_idx = sample_idx
-                        self.masks_list = masks_list
-
-                    def __getitem__(self, idx):
-                        item = self.dataset[self.sample_idx]
-                        item["masks"] = self.masks_list[idx]
-                        return item
-
-                    def __len__(self):
-                        return len(self.masks_list)
-
-                func = lambda x: softmax(
-                    surrogate_trainer.predict(
-                        SampleDataset(
-                            dataset=dataset_banzhaf_regression[dataset_key],
-                            sample_idx=sample_idx,
-                            masks_list=x,
-                        ),
-                    ).predictions[0],
-                    axis=2,
-                )
-
-                _, tracking_dict, ratio = BanzhafRegression(
-                    surrogate=func,
-                    num_players=196,
-                    num_subsets=banzhaf_regression_key[dataset_key],
-                    detect_convergence=True,
-                    paired_sampling=other_args.antithetical_sampling,
-                    return_all=True,
-                    variance_batches=2,
-                    min_variance_samples=2,
-                )
-
-                save_path = os.path.join(
-                    training_args.output_dir,
-                    "extract_output",
-                    dataset_key,
-                    str(sample_idx),
-                    f"banzhaf_output.pt",
-                )
-                # make dir
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-                torch.save(obj=tracking_dict, f=save_path)
-
     if other_args.banzhaf_sampling:
         if (
             isinstance(other_args.banzhaf_sampling, str)
@@ -850,11 +778,15 @@ def main():
             if banzhaf_sampling_key[dataset_key] == 0:
                 continue
 
+            # import ipdb
             from scipy.special import softmax
 
+            # ipdb.set_trace()
             idx_list = [
                 sample_idx
-                for sample_idx in range(len(dataset_banzhaf_sampling[dataset_key]))
+                for sample_idx in np.random.RandomState(seed=42)
+                .permutation(list(range(len(dataset_banzhaf_sampling[dataset_key]))))
+                .tolist()[:100]
                 if not os.path.exists(
                     os.path.join(
                         training_args.output_dir,
@@ -866,7 +798,8 @@ def main():
                 )
             ]
 
-            print(idx_list)
+            # print(idx_list)
+            # ipdb.set_trace()
             # ddd
 
             # for sample_idx in tqdm(
@@ -875,7 +808,6 @@ def main():
             #     .tolist()[idx : idx + 1]
             # ):
             for sample_idx in tqdm(idx_list):
-                print(sample_idx)
 
                 class SampleDataset:
                     def __init__(self, dataset, sample_idx, masks_list):
@@ -943,6 +875,144 @@ def main():
                             dataset_key,
                             str(sample_idx),
                             f"banzhaf_output_{other_args.target_subset_size}_{subset_group_idx}.pt",
+                        )
+
+                        # make dir
+                        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+                        torch.save(obj=tracking_dict, f=save_path)
+
+    if other_args.lime_regression:
+        if (
+            isinstance(other_args.lime_regression, str)
+            and "," in other_args.lime_regression
+        ):
+            lime_regression_key = {
+                "train": int(other_args.lime_regression.split(",")[0]),
+                "validation": int(other_args.lime_regression.split(",")[1]),
+                "test": int(other_args.lime_regression.split(",")[2]),
+            }
+        else:
+            lime_regression_key = {
+                "train": int(other_args.lime_regression),
+                "validation": int(other_args.lime_regression),
+                "test": int(other_args.lime_regression),
+            }
+
+        dataset_lime_regression = copy.deepcopy(dataset_original)
+        dataset_lime_regression = configure_dataset(
+            dataset=dataset_lime_regression,
+            image_processor=surrogate_image_processor,
+            training_args=training_args,
+            data_args=data_args,
+            train_augmentation=False,
+            validation_augmentation=False,
+            test_augmentation=False,
+            logger=logger,
+        )
+        log_dataset(dataset=dataset_lime_regression, logger=logger)
+
+        for dataset_key in dataset_lime_regression.keys():
+            if lime_regression_key[dataset_key] == 0:
+                continue
+
+            # import ipdb
+            from scipy.special import softmax
+
+            # ipdb.set_trace()
+            idx_list = [
+                sample_idx
+                for sample_idx in np.random.RandomState(seed=42)
+                .permutation(list(range(len(dataset_lime_regression[dataset_key]))))
+                .tolist()[:100]
+                if not os.path.exists(
+                    os.path.join(
+                        training_args.output_dir,
+                        "extract_output",
+                        dataset_key,
+                        str(sample_idx),
+                        f"lime_output.pt",
+                    )
+                )
+            ]
+
+            # print(idx_list)
+            # ipdb.set_trace()
+            # ddd
+
+            # for sample_idx in tqdm(
+            #     np.random.RandomState(seed=42)
+            #     .permutation(list(range(len(dataset_lime_regression[dataset_key]))))
+            #     .tolist()[idx : idx + 1]
+            # ):
+            for sample_idx in tqdm(idx_list):
+
+                class SampleDataset:
+                    def __init__(self, dataset, sample_idx, masks_list):
+                        self.dataset = dataset
+                        self.sample_idx = sample_idx
+                        self.masks_list = masks_list
+
+                    def __getitem__(self, idx):
+                        item = self.dataset[self.sample_idx]
+                        item["masks"] = self.masks_list[idx]
+                        return item
+
+                    def __len__(self):
+                        return len(self.masks_list)
+
+                func = lambda x: softmax(
+                    surrogate_trainer.predict(
+                        SampleDataset(
+                            dataset=dataset_lime_regression[dataset_key],
+                            sample_idx=sample_idx,
+                            masks_list=x,
+                        ),
+                    ).predictions[0],
+                    axis=2,
+                )
+                if other_args.target_subset_size is None:
+                    _, tracking_dict = LIMERegression(
+                        surrogate=func,
+                        num_players=196,
+                        num_subsets=lime_regression_key[dataset_key],
+                        antithetical=other_args.antithetical_sampling,
+                        return_all=True,
+                    )
+
+                    save_path = os.path.join(
+                        training_args.output_dir,
+                        "extract_output",
+                        dataset_key,
+                        str(sample_idx),
+                        f"lime_output.pt",
+                    )
+                    # make dir
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+                    torch.save(obj=tracking_dict, f=save_path)
+                else:
+                    for subset_group_idx in range(
+                        lime_regression_key[dataset_key]
+                        // other_args.target_subset_size
+                    ):
+                        (
+                            _,
+                            tracking_dict,
+                        ) = LIMERegression(
+                            surrogate=func,
+                            num_players=196,
+                            num_subsets=other_args.target_subset_size,
+                            antithetical=other_args.antithetical_sampling,
+                            return_all=True,
+                        )
+
+                        save_path = os.path.join(
+                            training_args.output_dir,
+                            "extract_output",
+                            dataset_key,
+                            str(sample_idx),
+                            f"lime_output_{other_args.target_subset_size}_{subset_group_idx}.pt",
                         )
 
                         # make dir
