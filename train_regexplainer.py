@@ -129,6 +129,13 @@ class OtherArguments:
         },
     )
 
+    attribution_name: str = field(
+        default=None,
+        metadata={
+            "help": "attribution name",
+        },
+    )
+
 
 def main():
     ########################################################
@@ -353,7 +360,9 @@ def main():
         if mask_mode.startswith("upfront"):
             masks_param = int(mask_mode.split(",")[1])
             # load_shapley_dict = load_shapley(cache_path)
-            load_shapley_dict = load_attribution(cache_path, attribution_name="shapley")
+            load_shapley_dict = load_attribution(
+                cache_path, attribution_name=other_args.attribution_name
+            )
 
             assert len(dataset_explainer[dataset_key]) == len(
                 load_shapley_dict

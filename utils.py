@@ -304,9 +304,10 @@ def generate_mask(
         raise ValueError("'mode' must be 'random' or 'shapley'")
 
     if paired_mask_samples:
-        masks = np.stack([masks, 1 - masks], axis=1).reshape(
-            num_samples_ * 2, num_features
-        )
+        # masks = np.stack([masks, 1 - masks], axis=1).reshape(
+        #     num_samples_ * 2, num_features
+        # )
+        masks = np.hstack([masks, 1 - masks]).reshape(num_samples_ * 2, num_features)
 
     return masks  # (num_samples, num_masks)
 
