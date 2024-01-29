@@ -9,7 +9,7 @@
     "remove_unused_columns": false,
     "do_train": false,
     "do_eval": false,
-    "shapley_regression": "200000,0,0",
+    "shapley_regression": "1000000,0,0",
     "fp16": true,
     "learning_rate": 1e-5,
     "num_train_epochs": 50,

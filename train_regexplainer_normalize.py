@@ -129,6 +129,20 @@ class OtherArguments:
         },
     )
 
+    target_transform_mode: str = field(
+        default=None,
+        metadata={
+            "help": "transform mode for target",
+        },
+    )
+
+    attribution_name: str = field(
+        default=None,
+        metadata={
+            "help": "attribution name",
+        },
+    )
+
 
 def main():
     ########################################################
@@ -304,6 +318,7 @@ def main():
             explainer_revision=explainer_args.explainer_model_revision,
             explainer_token=other_args.token,
             explainer_ignore_mismatched_sizes=explainer_args.explainer_ignore_mismatched_sizes,
+            target_transform_mode=other_args.target_transform_mode,
         )
 
         explainer = RegExplainerNormalizeForImageClassification(
@@ -353,7 +368,9 @@ def main():
         if mask_mode.startswith("upfront"):
             masks_param = int(mask_mode.split(",")[1])
             # load_shapley_dict = load_shapley(cache_path)
-            load_shapley_dict = load_attribution(cache_path, attribution_name="banzhaf")
+            load_shapley_dict = load_attribution(
+                cache_path, attribution_name=other_args.attribution_name
+            )
 
             assert len(dataset_explainer[dataset_key]) == len(
                 load_shapley_dict

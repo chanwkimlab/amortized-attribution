@@ -282,7 +282,7 @@ def generate_mask(
             random_state.rand(num_samples_, num_features)
             > random_state.rand(num_samples_, 1)
         ).astype("int")
-    elif mode == "banzhaf":
+    elif mode == "banzhaf" or mode == "binomial":
         masks = (np.random.rand(num_samples_, num_features) > 0.5).astype("int")
     elif mode == "shapley":
         probs = 1 / (
@@ -517,8 +517,14 @@ def load_shapley(path, target_subset_size=None):
     return output_dict
 
 
-def load_attribution(path, attribution_name="shapley", target_subset_size=None):
+def load_attribution(
+    path, attribution_name="shapley", target_subset_size=None, sample_select=None
+):
     file_list = glob.glob(str(Path(path) / "[0-9]*"))
+    if sample_select is not None:
+        file_list = [
+            file for file in file_list if int(file.split("/")[-1]) in sample_select
+        ]
     output_dict = {}
     if target_subset_size is None:
         for file in tqdm(file_list):
@@ -547,7 +553,10 @@ def read_eval_results(path):
         [
             p
             for p in glob.glob(str(Path(path) / "*.pt"))
-            if not (p.split("/")[-1].startswith("shapley_output"))
+            if not (
+                (p.split("/")[-1].startswith("shapley_output"))
+                or (p.split("/")[-1].startswith("lime_output"))
+            )
         ]
     )
 

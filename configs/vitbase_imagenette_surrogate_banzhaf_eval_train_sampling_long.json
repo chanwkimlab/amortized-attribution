@@ -5,7 +5,7 @@
     "surrogate_ignore_mismatched_sizes": true,
     "dataset_name": "frgfm/imagenette",
     "dataset_config_name": "160px",
-    "dataset_cache_dir": "/local-b/chanwkim/huggingface_cache",
+    "dataset_cache_dir": "/sdata/chanwkim/huggingface_cache",
     "remove_unused_columns": false,
     "do_train": false,
     "do_eval": false,

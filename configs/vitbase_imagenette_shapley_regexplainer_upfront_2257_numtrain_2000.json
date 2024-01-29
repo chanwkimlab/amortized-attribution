@@ -31,6 +31,6 @@
     "load_best_model_at_end": true,
     "save_total_limit": 100,
     "seed": 42,
-    "output_dir": "./logs/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_2000",
+    "output_dir": "/sdata/chanwkim/xai-amortization/logs_0901/vitbase_imagenette_shapley_regexplainer_upfront_2257_numtrain_2000",
     "report_to": "wandb"
 }

@@ -39,6 +39,7 @@ class RegExplainerNormalizeForImageClassificationConfig(PretrainedConfig):
         explainer_revision=None,
         explainer_token=None,
         explainer_ignore_mismatched_sizes=None,
+        target_transform_mode=None,
         **kwargs,
     ):
         assert surrogate_pretrained_model_name_or_path is None or isinstance(
@@ -65,6 +66,8 @@ class RegExplainerNormalizeForImageClassificationConfig(PretrainedConfig):
         self.explainer_model_revision = explainer_revision
         self.explainer_token = explainer_token
         self.explainer_ignore_mismatched_sizes = explainer_ignore_mismatched_sizes
+
+        self.target_transform_mode = target_transform_mode
 
         super().__init__(**kwargs)
 
@@ -216,31 +219,48 @@ class RegExplainerNormalizeForImageClassification(PreTrainedModel):
         #     pred = self.mlps(last_hidden_state)
 
         loss = None
-        # import ipdb
 
-        # ipdb.set_trace()
         if return_loss:
-            # import ipdb
+            target = shapley_values.type(pred.dtype)
+            if self.config.target_transform_mode == "sqrt":
+                target_rescaled = torch.sign(target) * torch.pow(
+                    torch.abs(target), 0.35
+                )
+            elif self.config.target_transform_mode == "global":
+                target_rescaled = 100 * target
+            elif self.config.target_transform_mode == "perinstance":
+                target_rescaled = 100 * target / target.norm(dim=[1, 2], keepdim=True)
+            elif self.config.target_transform_mode == "perinstanceperclass":
+                target_rescaled = 100 * target / target.norm(dim=1, keepdim=True)
+            else:
+                raise ValueError(
+                    f"Unknown target transform: {self.config.target_transform}"
+                )
 
-            # ipdb.set_trace()
             value_diff = 196 * F.mse_loss(
                 input=pred,
-                # target=shapley_values.type(pred.dtype) * 100,
-                target=(
-                    torch.sign(shapley_values.type(pred.dtype))
-                    * torch.pow(torch.abs(shapley_values.type(pred.dtype)), 0.35)
-                ),
+                target=target_rescaled,
                 reduction="mean",
             )  # (batch, num_players, num_classes), (batch, num_players, num_classes)
 
             loss = value_diff
+
+        if self.config.target_transform_mode == "sqrt":
+            logits_rescaled = torch.sign(pred) * torch.pow(torch.abs(pred), 1 / 0.35)
+        elif self.config.target_transform_mode == "global":
+            logits_rescaled = 1 / 100 * pred
+        elif self.config.target_transform_mode == "perinstance":
+            logits_rescaled = 1 / 100 * pred
+        elif self.config.target_transform_mode == "perinstanceperclass":
+            logits_rescaled = 1 / 100 * pred
+
         return SemanticSegmenterOutput(
             loss=loss,
             # logits=(1 / 100)
             # * pred.transpose(
             #     1, 2
             # ),  # (batch, num_players, num_classes) -> (batch, num_classes, num_players)
-            logits=(torch.sign(pred) * torch.pow(torch.abs(pred), 1 / 0.35)).transpose(
+            logits=logits_rescaled.transpose(
                 1, 2
             ),  # (batch, num_players, num_classes) -> (batch, num_classes, num_players)
         )

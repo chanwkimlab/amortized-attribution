@@ -9,7 +9,7 @@
     "remove_unused_columns": false,
     "do_train": false,
     "do_eval": false,
-    "banzhaf_sampling": "0,0,1000000",
+    "lime_regression": "0,0,1000000",
     "fp16": true,
     "learning_rate": 1e-5,
     "num_train_epochs": 50,
@@ -26,6 +26,6 @@
     "load_best_model_at_end": true,
     "save_total_limit": 3,
     "seed": 42,
-    "output_dir": "./logs/vitbase_imagenette_surrogate_banzhaf_eval_test_sampling_long",
+    "output_dir": "./logs/vitbase_imagenette_surrogate_lime_eval_test_regression_long",
     "report_to": "wandb"
 }
