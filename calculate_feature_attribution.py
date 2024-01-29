@@ -113,13 +113,6 @@ class OtherArguments:
         },
     )
 
-    banzhaf_regression: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Extract output from the model. If None, will not extract output with N masks."
-        },
-    )
-
     banzhaf_sampling: Optional[str] = field(
         default=None,
         metadata={
