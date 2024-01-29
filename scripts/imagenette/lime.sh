@@ -24,13 +24,6 @@ python calculate_feature_attribution_using_extracted.py \
 --attribution_name lime
 
 
-
-# CUDA_VISIBLE_DEVICES=0,1,2 \
-# WANDB_PROJECT=xai-amortization \
-# WANDB_NAME=vitbase_imagenette_surrogate_lime_eval_train_sampling \
-# python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_lime_eval_train_sampling.json
-
-
 CUDA_VISIBLE_DEVICES=0,1,2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_lime_eval_train_regression_long \
@@ -41,11 +34,6 @@ WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_lime_eval_test_regression_long \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_lime_eval_test_regression_long.json
 
-
-CUDA_VISIBLE_DEVICES=0,1,2,5 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_global_128 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_global_128.json
 
 CUDA_VISIBLE_DEVICES=0,1,2,5 \
 WANDB_PROJECT=xai-amortization \
@@ -60,43 +48,12 @@ python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplai
 
 CUDA_VISIBLE_DEVICES=0,1,2,5 \
 WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_sqrt_128 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_sqrt_128.json
-
-CUDA_VISIBLE_DEVICES=0,1,2,5 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_sqrt_256 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_sqrt_256.json
-
-CUDA_VISIBLE_DEVICES=0,1,2,5 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_sqrt_512 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_sqrt_512.json
-
-
-CUDA_VISIBLE_DEVICES=0,1,2,5 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_perinstance_512 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_perinstance_512.json
-
-CUDA_VISIBLE_DEVICES=0,1,2,5 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_perinstance_256 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_perinstance_256.json
+WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_256 \
+python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_256.json
 
 CUDA_VISIBLE_DEVICES=0,1,2,5 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_512 \
 python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_512.json
-
-CUDA_VISIBLE_DEVICES=0,1,2,5 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_256 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_256.json
-
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-WANDB_PROJECT=xai-amortization \
-WANDB_NAME=vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_128 \
-python train_regexplainer_normalize.py configs/vitbase_imagenette_lime_regexplainer_upfront_perinstanceperclass_128.json
 
 put -r *
