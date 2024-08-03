@@ -376,9 +376,9 @@ def main():
         model=surrogate,
         args=training_args,
         train_dataset=dataset_surrogate["train"] if training_args.do_train else None,
-        eval_dataset=dataset_surrogate["validation"]
-        if training_args.do_train
-        else None,
+        eval_dataset=(
+            dataset_surrogate["validation"] if training_args.do_train else None
+        ),
         compute_metrics=compute_metrics,
         tokenizer=surrogate_image_processor,
         data_collator=collate_fn,

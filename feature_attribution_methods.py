@@ -11,6 +11,9 @@ class AttributionValues:
         self.std = std
 
 
+# ShapleySampling and ShapleyRegression are adapted from https://github.com/iancovert/shapley-regression/blob/master/shapreg/
+
+
 def ShapleySampling(
     surrogate,
     num_players,

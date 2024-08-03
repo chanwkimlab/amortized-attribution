@@ -1,4 +1,5 @@
-# XAI Amortization
+# Stochastic Amortization for XML
+A Unified Approach to Accelerate Feature and Data Attribution
 
 ## Installation
 
@@ -16,7 +17,17 @@ git config filter.strip-notebook-output.clean 'jupyter nbconvert --ClearOutputPr
 ```
 
 
+## Usage
 
+
+### Train amortization models
+*  `scripts/imagenette/classifier.sh`: train classifiers.
+* `scripts/imagenette/shapley.sh`: train amortization models for Shapley value feature attribution.
+* `sripts/imagenette/lime.sh`: train amortization models for LIME feature attribution.
+* `scripts/imagenette/banzhaf.sh`: train amortization models for Banzhaf feature attribution.
+
+### Evaluate amortization models
+* `notebooks/visualize_results.ipynb`: evaluate and visualize the results of the amortization models.
 
 ## Note
 
@@ -25,4 +36,3 @@ This repository was inspired by the following repositories:
 * [FastSHAP](https://github.com/iancovert/fastshap/tree/main/fastshap)
 * [ViT-Shapley](https://github.com/suinleelab/vit-shapley)
 * [Huggingface example - Image classification](https://github.com/huggingface/transformers/tree/149cb0cce2df3f932de58c6d05cec548600553e2/examples/pytorch/image-classification)
-
