@@ -45,8 +45,8 @@ from transformers.utils.versions import require_version
 
 from arguments import DataTrainingArguments, ExplainerArguments, SurrogateArguments
 from models import (
-    RegExplainerForImageClassification,
-    RegExplainerForImageClassificationConfig,
+    ObjExplainerForImageClassification,
+    ObjExplainerForImageClassificationConfig,
     SurrogateForImageClassificationConfig,
 )
 from utils import (
@@ -55,7 +55,6 @@ from utils import (
     generate_mask,
     get_checkpoint,
     get_image_transform,
-    load_attribution,
     load_shapley,
     log_dataset,
     read_eval_results,
@@ -90,19 +89,19 @@ class OtherArguments:
         },
     )
 
-    train_shapley_cache_path: str = field(
+    train_subsets_cache_path: str = field(
         default=None,
         metadata={
             "help": "Where to load the downloaded dataset.",
         },
     )
-    validation_shapley_cache_path: str = field(
+    validation_subsets_cache_path: str = field(
         default=None,
         metadata={
             "help": "Where to load the downloaded dataset.",
         },
     )
-    test_shapley_cache_path: str = field(
+    test_subsets_cache_path: str = field(
         default=None,
         metadata={
             "help": "Where to load the downloaded dataset.",
@@ -126,13 +125,6 @@ class OtherArguments:
         default="incremental,1",
         metadata={
             "help": "mask mode for test",
-        },
-    )
-
-    attribution_name: str = field(
-        default=None,
-        metadata={
-            "help": "attribution name",
         },
     )
 
@@ -239,6 +231,7 @@ def main():
     ########################################################
     # Initialize explainer model
     ########################################################
+
     explainer_config = AutoConfig.from_pretrained(
         explainer_args.explainer_config_name
         or explainer_args.explainer_model_name_or_path,
@@ -257,9 +250,9 @@ def main():
         json.loads(
             open(f"{explainer_args.explainer_model_name_or_path}/config.json").read()
         )["architectures"][0]
-        == "RegExplainerForImageClassification"
+        == "ObjExplainerForImageClassification"
     ):
-        explainer = RegExplainerForImageClassification.from_pretrained(
+        explainer = ObjExplainerForImageClassification.from_pretrained(
             explainer_args.explainer_model_name_or_path,
             from_tf=bool(".ckpt" in explainer_args.explainer_model_name_or_path),
             config=explainer_config,
@@ -292,7 +285,7 @@ def main():
             surrogate_ignore_mismatched_sizes=surrogate_args.surrogate_ignore_mismatched_sizes,
         )
 
-        explainer_for_image_classification_config = RegExplainerForImageClassificationConfig(
+        explainer_for_image_classification_config = ObjExplainerForImageClassificationConfig(
             surrogate_pretrained_model_name_or_path=surrogate_args.surrogate_model_name_or_path,
             surrogate_config=surrogate_for_image_classification_config,
             surrogate_from_tf=bool(
@@ -313,7 +306,7 @@ def main():
             explainer_ignore_mismatched_sizes=explainer_args.explainer_ignore_mismatched_sizes,
         )
 
-        explainer = RegExplainerForImageClassification(
+        explainer = ObjExplainerForImageClassification(
             config=explainer_for_image_classification_config,
         )
     explainer_image_processor = AutoImageProcessor.from_pretrained(
@@ -343,10 +336,10 @@ def main():
         # mask num samples
         # batch size
         if dataset_key == "train":
-            cache_path = other_args.train_shapley_cache_path
+            cache_path = other_args.train_subsets_cache_path
             mask_mode = other_args.train_mask_mode
         elif dataset_key == "validation":
-            cache_path = other_args.validation_shapley_cache_path
+            cache_path = other_args.validation_subsets_cache_path
             mask_mode = other_args.validation_mask_mode
         elif dataset_key == "test":
             continue
@@ -357,153 +350,72 @@ def main():
                 f"Dataset key {dataset_key} not recognized. Choose from ['train', 'validation', 'test']"
             )
 
-        if mask_mode.startswith("upfront"):
+        grand_all = []
+        null_all = []
+        subsets_logits_all = []
+        subsets_masks_all = []
+        assert len(dataset_explainer[dataset_key]) == len(
+            os.listdir(cache_path)
+        ), f"eval list: {len(dataset_explainer[dataset_key])} != {len(os.listdir(cache_path))}"
+        for sample_idx in tqdm(range(len(dataset_explainer[dataset_key]))):
+            eval_results = read_eval_results(f"{cache_path}/{sample_idx}")
+
+            grand_all.append(eval_results["grand"]["logits"])
+            null_all.append(eval_results["null"]["logits"])
+            subsets_logits_all.append(
+                eval_results["subsets"]["logits"]
+            )  # (num_subsets, num_classes)
+            subsets_masks_all.append(
+                eval_results["subsets"]["masks"]
+            )  # (num_subsets, num_players)
+
+        num_subsets = np.unique(
+            [subsets_logits.shape[0] for subsets_logits in subsets_logits_all]
+        )
+        assert len(num_subsets) == 1
+        num_subsets = num_subsets[0]
+
+        dataset_explainer[dataset_key] = MaskDataset(
+            dataset_explainer[dataset_key],
+        )
+        # import ipdb
+
+        # ipdb.set_trace()
+        if mask_mode.startswith("new_samples"):
             masks_param = int(mask_mode.split(",")[1])
-            # load_shapley_dict = load_shapley(cache_path)
-            load_shapley_dict = load_attribution(
-                cache_path, attribution_name=other_args.attribution_name
-            )
-
-            assert len(dataset_explainer[dataset_key]) == len(
-                load_shapley_dict
-            ), f"eval list: {len(dataset_explainer[dataset_key])} != {len(load_shapley_dict)}"
-
-            shapley_output_all = []
-
-            for sample_idx in range(len(dataset_explainer[dataset_key])):
-                assert len(load_shapley_dict[sample_idx]["iters"]) == len(
-                    load_shapley_dict[sample_idx]["values"]
-                ), f"{len(load_shapley_dict[sample_idx]['iters'])} != {len(load_shapley_dict[sample_idx]['values'])}"
-                if isinstance(load_shapley_dict[sample_idx]["iters"], np.ndarray):
-                    load_shapley_dict[sample_idx]["iters"] = load_shapley_dict[
-                        sample_idx
-                    ]["iters"].tolist()
-                shapley_output_all.append(
-                    [
-                        load_shapley_dict[sample_idx]["values"][
-                            load_shapley_dict[sample_idx]["iters"].index(masks_param)
-                        ]
-                    ]
-                )
-            dataset_explainer[dataset_key] = MaskDataset(
-                dataset_explainer[dataset_key],
-            )
 
             dataset_explainer[dataset_key].set_cache(
-                shapley_values=shapley_output_all,
-                cache_start_idx=0,
-                cache_mask_size=0,
+                masks=subsets_masks_all,
+                model_outputs=subsets_logits_all,
+                grand_values=grand_all,
+                null_values=null_all,
+                cache_start_idx=lambda x: masks_param * x,
+                cache_mask_size=masks_param,
             )
-
-        elif mask_mode.startswith("targetupfront"):
-            masks_param = int(mask_mode.split(",")[1])
-            if len(mask_mode.split(",")) == 3:
-                datasize_param = int(mask_mode.split(",")[2])
-            else:
-                datasize_param = None
-
-            load_shapley_dict = load_shapley(cache_path, target_subset_size=masks_param)
-
-            assert len(dataset_explainer[dataset_key]) == len(
-                load_shapley_dict
-            ), f"eval list: {len(dataset_explainer[dataset_key])} != {len(load_shapley_dict)}"
-
-            shapley_output_all = []
-
-            for sample_idx in range(len(dataset_explainer[dataset_key])):
-                shapley_output_list = []
-                for subset_group_idx in range(len(load_shapley_dict[sample_idx])):
-                    assert len(
-                        load_shapley_dict[sample_idx][subset_group_idx]["iters"]
-                    ) == len(
-                        load_shapley_dict[sample_idx][subset_group_idx]["values"]
-                    ), f"{len(load_shapley_dict[sample_idx][subset_group_idx]['iters'])} != {len(load_shapley_dict[sample_idx][subset_group_idx]['values'])}"
-
-                    if isinstance(
-                        load_shapley_dict[sample_idx][subset_group_idx]["iters"],
-                        np.ndarray,
-                    ):
-                        load_shapley_dict[sample_idx][subset_group_idx]["iters"] = (
-                            load_shapley_dict[sample_idx][subset_group_idx][
-                                "iters"
-                            ].tolist()
-                        )
-
-                    shapley_output_list.append(
-                        load_shapley_dict[sample_idx][subset_group_idx]["values"][
-                            load_shapley_dict[sample_idx][subset_group_idx][
-                                "iters"
-                            ].index(masks_param)
-                        ]
-                    )
-                shapley_output_all.append(shapley_output_list)
-
-            if datasize_param is not None:
-                idx_random_list = (
-                    np.random.RandomState(seed=42)
-                    .permutation(list(range(len(dataset_explainer[dataset_key]))))
-                    .tolist()[:datasize_param]
-                )
-
-                dataset_explainer[dataset_key] = dataset_explainer[dataset_key].select(
-                    idx_random_list
-                )
-                shapley_output_all = [
-                    shapley_output_all[temp_idx] for temp_idx in idx_random_list
-                ]
-
-            dataset_explainer[dataset_key] = MaskDataset(
-                dataset_explainer[dataset_key],
-            )
-
-            dataset_explainer[dataset_key].set_cache(
-                shapley_values=shapley_output_all,
-                cache_start_idx=0,
-                cache_mask_size=0,
-            )
-
-        elif mask_mode.startswith("newsample"):
-            masks_param = int(mask_mode.split(",")[1])
-            load_shapley_dict = load_shapley(cache_path, target_subset_size=masks_param)
-
-            assert len(dataset_explainer[dataset_key]) == len(
-                load_shapley_dict
-            ), f"eval list: {len(dataset_explainer[dataset_key])} != {len(load_shapley_dict)}"
-
-            shapley_output_all = []
-
-            for sample_idx in range(len(dataset_explainer[dataset_key])):
-                shapley_output_list = []
-                for subset_group_idx in range(len(load_shapley_dict[sample_idx])):
-                    assert len(
-                        load_shapley_dict[sample_idx][subset_group_idx]["iters"]
-                    ) == len(
-                        load_shapley_dict[sample_idx][subset_group_idx]["values"]
-                    ), f"{len(load_shapley_dict[sample_idx][subset_group_idx]['iters'])} != {len(load_shapley_dict[sample_idx][subset_group_idx]['values'])}"
-                    shapley_output_list.append(
-                        load_shapley_dict[sample_idx][subset_group_idx]["values"][
-                            load_shapley_dict[sample_idx][subset_group_idx]["iters"]
-                            .tolist()
-                            .index(masks_param)
-                        ]
-                    )
-                shapley_output_all.append(shapley_output_list)
-
-            dataset_explainer[dataset_key] = MaskDataset(
-                dataset_explainer[dataset_key],
-            )
-
-            dataset_explainer[dataset_key].set_cache(
-                shapley_values=shapley_output_all,
-                cache_start_idx=lambda x: x,
-                cache_mask_size=0,
-            )
-
         elif mask_mode.startswith("accumulated"):
-            raise NotImplementedError
+            masks_param = int(mask_mode.split(",")[1])
+
+            dataset_explainer[dataset_key].set_cache(
+                masks=subsets_masks_all,
+                model_outputs=subsets_logits_all,
+                grand_values=grand_all,
+                null_values=null_all,
+                cache_start_idx=0,
+                cache_mask_size=lambda x: masks_param * (x + 1),
+            )
+        elif mask_mode.startswith("upfront"):
+            masks_param = int(mask_mode.split(",")[1])
+            dataset_explainer[dataset_key].set_cache(
+                masks=subsets_masks_all,
+                model_outputs=subsets_logits_all,
+                grand_values=grand_all,
+                null_values=null_all,
+                cache_start_idx=0,
+                cache_mask_size=masks_param,
+            )
         else:
             raise ValueError(
-                f"Mask mode {mask_mode} not recognized. Choose from ['upfront', 'newsample', 'accumulated']"
+                f"mask mode {mask_mode} not recognized. Choose from ['new_samples', 'accumulated', 'upfront']"
             )
 
     log_dataset(dataset=dataset_explainer, logger=logger)
@@ -524,14 +436,24 @@ def main():
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
         labels = torch.tensor([example["labels"] for example in examples])
-        shapley_values = torch.tensor(
-            np.array([example["shapley_values"] for example in examples])
+        masks = torch.tensor(np.array([example["masks"] for example in examples]))
+        model_outputs = torch.tensor(
+            np.array([example["model_outputs"] for example in examples])
+        )
+        grand_values = torch.tensor(
+            np.array([example["grand_values"] for example in examples])
+        )
+        null_values = torch.tensor(
+            np.array([example["null_values"] for example in examples])
         )
 
         return {
             "pixel_values": pixel_values,
             "labels": labels,
-            "shapley_values": shapley_values,
+            "masks": masks,
+            "model_outputs": model_outputs,
+            "grand_values": grand_values,
+            "null_values": null_values,
         }
 
     explainer_trainer = Trainer(

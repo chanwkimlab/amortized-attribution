@@ -194,29 +194,13 @@ class RegExplainerNormalizeForImageClassification(PreTrainedModel):
         )
         hidden_states = output["hidden_states"][-1]
 
-        # output = self.backbone(x=pixel_values)
-        # embedding_cls, embedding_tokens = output["x"], output["x_others"]
-
-        # if self.hparams.explainer_head_include_cls:
-        #     embedding_all = torch.cat(
-        #         [embedding_cls.unsqueeze(dim=1), embedding_tokens], dim=1
-        #     )
-        # else:
-        #     embedding_all = embedding_tokens
-
         for _, attention_layer in enumerate(self.attention_blocks):
             hidden_states = attention_layer(hidden_states=hidden_states)
             hidden_states = hidden_states[0]  # (batch, 1+num_players, hidden_size)
 
-        # import ipdb
-
         pred = self.mlp_blocks(
             hidden_states[:, 1:, :]
         )  # (batch, num_players, num_classes)
-        # if self.hparams.explainer_head_include_cls:
-        #     pred = self.mlps(last_hidden_state)[:, 1:]
-        # else:
-        #     pred = self.mlps(last_hidden_state)
 
         loss = None
 
@@ -257,9 +241,6 @@ class RegExplainerNormalizeForImageClassification(PreTrainedModel):
         return SemanticSegmenterOutput(
             loss=loss,
             # logits=(1 / 100)
-            # * pred.transpose(
-            #     1, 2
-            # ),  # (batch, num_players, num_classes) -> (batch, num_classes, num_players)
             logits=logits_rescaled.transpose(
                 1, 2
             ),  # (batch, num_players, num_classes) -> (batch, num_classes, num_players)

@@ -191,34 +191,16 @@ class RegExplainerForImageClassification(PreTrainedModel):
         )
         hidden_states = output["hidden_states"][-1]
 
-        # output = self.backbone(x=pixel_values)
-        # embedding_cls, embedding_tokens = output["x"], output["x_others"]
-
-        # if self.hparams.explainer_head_include_cls:
-        #     embedding_all = torch.cat(
-        #         [embedding_cls.unsqueeze(dim=1), embedding_tokens], dim=1
-        #     )
-        # else:
-        #     embedding_all = embedding_tokens
-
         for _, attention_layer in enumerate(self.attention_blocks):
             hidden_states = attention_layer(hidden_states=hidden_states)
             hidden_states = hidden_states[0]  # (batch, 1+num_players, hidden_size)
 
-        # import ipdb
-
         pred = self.mlp_blocks(
             hidden_states[:, 1:, :]
         ).tanh()  # (batch, num_players, num_classes)
-        # if self.hparams.explainer_head_include_cls:
-        #     pred = self.mlps(last_hidden_state)[:, 1:]
-        # else:
-        #     pred = self.mlps(last_hidden_state)
 
         loss = None
-        # import ipdb
 
-        # ipdb.set_trace()
         if return_loss:
             value_diff = 196 * F.mse_loss(
                 input=pred, target=shapley_values.type(pred.dtype), reduction="mean"

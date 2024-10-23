@@ -150,9 +150,6 @@ def ShapleyRegressionPrecomputed(
         game_S = model_outputs[
             batch_size * it : batch_size * (it + 1)
         ]  # (batch_size, num_classes)
-        #         print("S", S, S.sum(axis=1))
-        #         print("game(s)", game_S)
-        #         print("game(s)-null", game_S-null)
 
         A_sample = np.matmul(
             S[:, :, np.newaxis].astype(float), S[:, np.newaxis, :].astype(float)
@@ -161,9 +158,6 @@ def ShapleyRegressionPrecomputed(
         b_sample = (
             S.astype(float).T * (game_S - null)[:, np.newaxis].T
         ).T  # (num_players, batch_size) * (1, num_classes, batch_size) = (num_players, num_classes)
-
-        #         print("b", b_sample)
-        #         print("variance_batches", variance_batches)
 
         # Welford's algorithm.
         n += len(S)
@@ -186,14 +180,13 @@ def ShapleyRegressionPrecomputed(
             estimate_list.append(calculate_result_shapley(A_sample, b_sample, total))
 
             # Estimate current var.
-            # print(len(estimate_list), min_variance_samples)
             if len(estimate_list) >= min_variance_samples:
                 var = np.array(estimate_list).var(axis=0)
 
         # Convergence ratio.
         std = np.sqrt(var * variance_batches / (it + 1))
         ratio = np.max(np.max(std, axis=0) / (values.max(axis=0) - values.min(axis=0)))
-        # print("std", var)
+
         # Print progress message.
         if verbose:
             if detect_convergence:
@@ -229,14 +222,11 @@ def ShapleyRegressionPrecomputed(
             if detect_convergence:
                 N_list.append(N_est)
 
-        # print("size", batch_size*it, len(masks))
         if batch_size * (it + 1) >= len(masks):
             break
-    # print(ratio)
     # Return results.
     if return_all:
         # Dictionary for progress tracking.
-        # iters = (np.arange(it + 1) + 1) * batch_size * (1)
         tracking_dict = {"values": val_list, "std": std_list, "iters": iters}
         if detect_convergence:
             tracking_dict["N_est"] = N_list
@@ -247,9 +237,6 @@ def ShapleyRegressionPrecomputed(
 
 
 def LIMERegressionPrecomputed(masks, model_outputs, batch_size, num_players):
-    # interval_array = np.array(
-    #     [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500]
-    # )
     assert len(masks) == len(model_outputs)
     assert batch_size <= len(masks)
     assert num_players == masks.shape[1]

@@ -170,9 +170,6 @@ class SurrogateForImageClassification(PreTrainedModel):
             * (
                 masks_resize.unsqueeze(1)
             ),  # (num_batches * num_mask_samples, num_channels, width, height) x (num_batches * num_mask_samples, 1, width, height)
-            # labels=labels.repeat_interleave(num_mask_samples, dim=0),
-            # **kwargs,
-            # **{i:  for i in kwargs if i != "labels"},
         )
 
         loss = None
@@ -181,21 +178,6 @@ class SurrogateForImageClassification(PreTrainedModel):
             self.classifier.eval()
             with torch.no_grad():
                 classifier_output = self.classifier(pixel_values=pixel_values)
-
-            # print(
-            #     "classifier",
-            #     classifier_output["logits"]
-            #     .view(-1, self.surrogate.num_labels)
-            #     .softmax(dim=1)
-            #     .max(),
-            # )
-            # print(
-            #     "surrogate",
-            #     surrogate_output["logits"]
-            #     .view(-1, self.surrogate.num_labels)
-            #     .softmax(dim=1)
-            #     .max(),
-            # )
 
             if self.surrogate.config.problem_type == "regression":
                 raise NotImplementedError
