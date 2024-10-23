@@ -1,17 +1,17 @@
 
 # train evaluation
 
-CUDA_VISIBLE_DEVICES=0,2,3 \
+CUDA_VISIBLE_DEVICES=0,1,2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_banzhaf_eval_train_sampling_long \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_banzhaf_eval_train_sampling_long.json
 
-CUDA_VISIBLE_DEVICES=4,5,6 \
+CUDA_VISIBLE_DEVICES=0,1,2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_banzhaf_eval_train_sampling \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_banzhaf_eval_train_sampling.json
 
-CUDA_VISIBLE_DEVICES=4,5,6 \
+CUDA_VISIBLE_DEVICES=0,1,2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_banzhaf_eval_train_sampling_short \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_banzhaf_eval_train_sampling_short.json
@@ -19,49 +19,49 @@ python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_ban
 
 # validation evaluation
 
-CUDA_VISIBLE_DEVICES=4,5,6 \
+CUDA_VISIBLE_DEVICES=0,1,2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_banzhaf_eval_validation_sampling \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_banzhaf_eval_validation_sampling.json
 
-CUDA_VISIBLE_DEVICES=4,5,6 \
+CUDA_VISIBLE_DEVICES=0,1,2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_banzhaf_eval_validation_sampling_short \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_banzhaf_eval_validation_sampling_short.json
 
-CUDA_VISIBLE_DEVICES=0,2,3 \
+CUDA_VISIBLE_DEVICES=0,1,2 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_surrogate_banzhaf_eval_test_sampling_long \
 python calculate_feature_attribution.py configs/vitbase_imagenette_surrogate_banzhaf_eval_test_sampling_long.json
 
 
-CUDA_VISIBLE_DEVICES=2,5,6,7 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_banzhaf_regexplainer_upfront_global_10 \
 python train_regexplainer_normalize.py configs/vitbase_imagenette_banzhaf_regexplainer_upfront_global_10.json
 
-CUDA_VISIBLE_DEVICES=0,1,2,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_banzhaf_regexplainer_upfront_global_100 \
 python train_regexplainer_normalize.py configs/vitbase_imagenette_banzhaf_regexplainer_upfront_global_100.json
 
-CUDA_VISIBLE_DEVICES=4,5,6,7 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_banzhaf_regexplainer_upfront_global_500 \
 python train_regexplainer_normalize.py configs/vitbase_imagenette_banzhaf_regexplainer_upfront_global_500.json
 
 
-CUDA_VISIBLE_DEVICES=1,2,3,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_banzhaf_regexplainer_upfront_perinstanceperclass_10 \
 python train_regexplainer_normalize.py configs/vitbase_imagenette_banzhaf_regexplainer_upfront_perinstanceperclass_10.json
 
-CUDA_VISIBLE_DEVICES=1,2,3,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_banzhaf_regexplainer_upfront_perinstanceperclass_100 \
 python train_regexplainer_normalize.py configs/vitbase_imagenette_banzhaf_regexplainer_upfront_perinstanceperclass_100.json
 
-CUDA_VISIBLE_DEVICES=1,2,3,5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 WANDB_PROJECT=xai-amortization \
 WANDB_NAME=vitbase_imagenette_banzhaf_regexplainer_upfront_perinstanceperclass_500 \
 python train_regexplainer_normalize.py configs/vitbase_imagenette_banzhaf_regexplainer_upfront_perinstanceperclass_500.json
