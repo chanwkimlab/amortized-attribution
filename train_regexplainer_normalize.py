@@ -11,7 +11,7 @@
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
+# Modifications Copyright 2023 Chanwoo Kim
 import copy
 import json
 import logging
@@ -432,11 +432,11 @@ def main():
                         load_shapley_dict[sample_idx][subset_group_idx]["iters"],
                         np.ndarray,
                     ):
-                        load_shapley_dict[sample_idx][subset_group_idx][
-                            "iters"
-                        ] = load_shapley_dict[sample_idx][subset_group_idx][
-                            "iters"
-                        ].tolist()
+                        load_shapley_dict[sample_idx][subset_group_idx]["iters"] = (
+                            load_shapley_dict[sample_idx][subset_group_idx][
+                                "iters"
+                            ].tolist()
+                        )
 
                     shapley_output_list.append(
                         load_shapley_dict[sample_idx][subset_group_idx]["values"][
@@ -547,9 +547,9 @@ def main():
         model=explainer,
         args=training_args,
         train_dataset=dataset_explainer["train"] if training_args.do_train else None,
-        eval_dataset=dataset_explainer["validation"]
-        if training_args.do_train
-        else None,
+        eval_dataset=(
+            dataset_explainer["validation"] if training_args.do_train else None
+        ),
         compute_metrics=compute_metrics,
         tokenizer=explainer_image_processor,
         data_collator=collate_fn,
