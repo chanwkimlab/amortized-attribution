@@ -1,5 +1,5 @@
-# Stochastic Amortization for XML
-A Unified Approach to Accelerate Feature and Data Attribution
+# Stochastic Amortization for feature attributions
+This repository implements an amortized approach to feature attribution from [this paper](https://arxiv.org/abs/2401.15866) published in NeurIPS 2024. The code for data valuation is available in [this repo](https://github.com/iancovert/amortized-valuation).
 
 ## Installation
 
@@ -12,7 +12,7 @@ pip install fsspec==2023.6.0
 pip install jupyterlab jupyter_contrib_nbextensions wandb ipdb gpustat seaborn
 ipython kernel install --name "xai-amortization" --user
 
-# Set up git filter
+# Set up git filter if you want to strip the output of Jupyter notebooks before committing
 git config filter.strip-notebook-output.clean 'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --ClearMetadataPreprocessor.enabled=True --to=notebook --stdin --stdout --log-level=ERROR'
 ```
 

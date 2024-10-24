@@ -372,9 +372,9 @@ def main():
         model=surrogate,
         args=training_args,
         train_dataset=dataset_surrogate["train"] if training_args.do_train else None,
-        eval_dataset=dataset_surrogate["validation"]
-        if training_args.do_train
-        else None,
+        eval_dataset=(
+            dataset_surrogate["validation"] if training_args.do_train else None
+        ),
         compute_metrics=compute_metrics,
         tokenizer=surrogate_image_processor,
         data_collator=collate_fn,
@@ -578,9 +578,9 @@ def main():
                         mbsize=2,
                         step=0.0005,
                         step_type="constant",
-                        sampling="paired"
-                        if other_args.antithetical_sampling
-                        else "default",
+                        sampling=(
+                            "paired" if other_args.antithetical_sampling else "default"
+                        ),
                         averaging="uniform",
                     )
 
@@ -606,9 +606,11 @@ def main():
                             mbsize=2,
                             step=0.0005,
                             step_type="constant",
-                            sampling="paired"
-                            if other_args.antithetical_sampling
-                            else "default",
+                            sampling=(
+                                "paired"
+                                if other_args.antithetical_sampling
+                                else "default"
+                            ),
                             averaging="uniform",
                         )
 
@@ -929,15 +931,6 @@ def main():
                 )
             ]
 
-            # print(idx_list)
-            # ipdb.set_trace()
-            # ddd
-
-            # for sample_idx in tqdm(
-            #     np.random.RandomState(seed=42)
-            #     .permutation(list(range(len(dataset_lime_regression[dataset_key]))))
-            #     .tolist()[idx : idx + 1]
-            # ):
             for sample_idx in tqdm(idx_list):
 
                 class SampleDataset:

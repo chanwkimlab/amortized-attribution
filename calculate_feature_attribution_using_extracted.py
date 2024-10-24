@@ -78,7 +78,50 @@ def ShapleyRegressionPrecomputed(
     bar=True,
     verbose=False,
 ):
-    # Verify arguments.
+    """
+    Perform Shapley regression with precomputed model outputs.
+
+    Parameters
+    ----------
+    grand_value : float
+        Value of the grand coalition.
+    null_value : float
+        Value of the null coalition.
+    model_outputs : np.ndarray
+        Model outputs for each subset.
+    masks : np.ndarray
+        Binary masks representing subsets.
+    num_players : int
+        Number of features/players.
+    batch_size : int, optional
+        Size of each batch for processing, by default 512.
+    detect_convergence : bool, optional
+        Whether to detect convergence based on threshold, by default True.
+    thresh : float, optional
+        Threshold for convergence detection, by default 0.01.
+    n_samples : int, optional
+        Maximum number of samples to process, by default None.
+    return_all : bool, optional
+        Whether to return all intermediate results, by default False.
+    min_variance_samples : int, optional
+        Minimum number of samples for variance estimation, by default None.
+    variance_batches : int, optional
+        Number of batches to use for variance estimation, by default None.
+    bar : bool, optional
+        Whether to display a progress bar, by default True.
+    verbose : bool, optional
+        Whether to print progress messages, by default False.
+
+    Returns
+    -------
+    AttributionValues
+        A tuple containing the Shapley values and their standard deviations.
+    tracking_dict : dict, optional
+        A dictionary containing intermediate values, standard deviations,
+        and iteration counts, if return_all is True.
+    ratio : float
+        The convergence ratio.
+    """
     from tqdm.auto import tqdm
 
     if min_variance_samples is None:
@@ -237,6 +280,29 @@ def ShapleyRegressionPrecomputed(
 
 
 def LIMERegressionPrecomputed(masks, model_outputs, batch_size, num_players):
+    """
+    Compute Shapley values using the LIME Regression approach.
+
+    Parameters
+    ----------
+    masks : np.ndarray, shape (num_subsets, num_players)
+        Boolean array indicating which players are included in each subset.
+    model_outputs : np.ndarray, shape (num_subsets, num_classes)
+        Output of the model for each subset.
+    batch_size : int
+        Number of samples to process at once.
+    num_players : int
+        Number of players in the game.
+
+    Returns
+    -------
+    AttributionValues
+        Shapley values and standard deviation.
+    dict
+        Dictionary tracking progress.
+    float
+        Ratio of current iteration to estimated number of iterations required for convergence.
+    """
     assert len(masks) == len(model_outputs)
     assert batch_size <= len(masks)
     assert num_players == masks.shape[1]

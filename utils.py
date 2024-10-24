@@ -20,7 +20,40 @@ from transformers.trainer_utils import get_last_checkpoint
 
 
 def setup_dataset(data_args, other_args):
+    """
+    Set up a dataset for image classification based on the provided arguments.
+
+    Parameters
+    ----------
+    data_args : DataTrainingArguments
+        Arguments related to data configuration, including dataset name,
+        cache directory, and train/validation split ratios.
+    other_args : OtherArguments
+        Additional arguments, including authentication tokens.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - dataset (DatasetDict): The loaded dataset.
+        - labels (List[str]): List of class labels.
+        - label2id (dict): Mapping from label names to IDs.
+        - id2label (dict): Mapping from IDs to label names.
+
+    Notes
+    -----
+    - If a dataset name is provided, it is loaded from the hub. If the dataset
+      is "frgfm/imagenette", the label column is renamed to "labels".
+    - If no dataset name is provided, the dataset is loaded from local image folders.
+    - If a validation split is not present, a portion of the training data can
+      be split off for validation based on the specified ratio.
+    - If a test split is not present, a portion of the validation data can be
+      split off for testing based on the specified ratio.
+    - The function prepares label mappings for human-readable labels in the
+      model's configuration.
+    """
     if data_args.dataset_name is not None:
+        # Load dataset from HuggingFace hub
         if data_args.dataset_name == "frgfm/imagenette":
             dataset = load_dataset(
                 data_args.dataset_name,
@@ -35,6 +68,7 @@ def setup_dataset(data_args, other_args):
                     dataset[split] = dataset[split].rename_column("label", "labels")
 
         else:
+            # Load dataset from local directories
             dataset = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
@@ -90,6 +124,19 @@ def setup_dataset(data_args, other_args):
 
 
 def pil_loader(path: str):
+    """
+    Load an image from the given path using PIL.
+
+    Parameters
+    ----------
+    path : str
+        Path to the image file.
+
+    Returns
+    -------
+    Image.Image
+        The loaded image in RGB mode.
+    """
     with open(path, "rb") as f:
         im = Image.open(f)
         return im.convert("RGB")
@@ -97,6 +144,25 @@ def pil_loader(path: str):
 
 def get_image_transform(image_processor):
     # Define torchvision transforms to be applied to each image.
+    """
+    Create and return a dictionary of image transformation functions.
+
+    This function defines two sets of torchvision transformations for image processing:
+    an augmentation transform for training and a static transform for validation/testing.
+    The transformations include resizing, cropping, normalization, and conversion to tensor.
+
+    Parameters
+    ----------
+    image_processor : object
+        An object containing image processing configurations, including size, mean, and std.
+
+    Returns
+    -------
+    dict
+        A dictionary containing two functions:
+        - 'augment_transform': a function to apply augmentation transforms on a batch of images.
+        - 'static_transform': a function to apply static transforms on a batch of images.
+    """
     if "shortest_edge" in image_processor.size:
         size = image_processor.size["shortest_edge"]
     else:
@@ -157,6 +223,33 @@ def configure_dataset(
     test_augmentation,
     logger,
 ):
+    """
+    Configure dataset splits and assign transformations.
+
+    Args
+    ----
+    dataset : DatasetDict
+        The dataset to configure.
+    image_processor : object
+        Image processor object with size and normalization details.
+    training_args : TrainingArguments
+        Training configuration.
+    data_args : DataTrainingArguments
+        Data-related configuration such as sample limits.
+    train_augmentation : bool
+        Whether to apply augmentation to the training split.
+    validation_augmentation : bool
+        Whether to apply augmentation to the validation split.
+    test_augmentation : bool
+        Whether to apply augmentation to the test split.
+    logger : Logger
+        Logger instance for logging messages.
+
+    Returns
+    -------
+    DatasetDict
+        The configured dataset.
+    """
     if training_args.do_train:
         if "train" not in dataset:
             raise ValueError("--do_train requires a train dataset")
@@ -198,9 +291,11 @@ def configure_dataset(
         elif dataset_key == "validation":
             dataset[dataset_key].set_transform(
                 lambda x: get_image_transform(image_processor)[
-                    "augment_transform"
-                    if validation_augmentation
-                    else "static_transform"
+                    (
+                        "augment_transform"
+                        if validation_augmentation
+                        else "static_transform"
+                    )
                 ](x)
             )
         elif dataset_key == "test":
@@ -220,6 +315,16 @@ def configure_dataset(
 
 
 def log_dataset(dataset, logger):
+    """
+    Log dataset statistics.
+
+    Parameters
+    ----------
+    dataset : dict
+        Dictionary containing dataset splits (e.g., 'train', 'validation', 'test').
+    logger : Logger
+        Logger instance to log messages.
+    """
     logger.info(f"Dataset statistics: ")
     for dataset_key in dataset.keys():
         logger.info(f"*{dataset_key}: {len(dataset[dataset_key]):,} samples")
@@ -251,21 +356,28 @@ def generate_mask(
     num_mask_samples: int = 1,
     paired_mask_samples: bool = True,
     mode: str = "uniform",
-    random_state: np.random.RandomState or None = None,
+    random_state=None,
 ) -> np.array:
     """
-    Args:
-        num_features: the number of features
-        num_mask_samples: the number of masks to generate
-        paired_mask_samples: if True, the generated masks are pairs of x and 1-x.
-        mode: the distribution that the number of masked features follows. ('uniform' or 'shapley')
-        random_state: random generator
+    Generate binary masks for feature inclusion/exclusion.
 
-    Returns:
-        torch.Tensor of shape
-        (num_masks, num_features) if num_masks is int
-        (num_features) if num_masks is None
+    Parameters
+    ----------
+    num_features : int
+        Total number of features.
+    num_mask_samples : int, optional
+        Number of masks to generate (default: 1).
+    paired_mask_samples : bool, optional
+        Whether to generate pairs of complementary masks (default: True).
+    mode : str, optional
+        Sampling mode ('uniform', 'shapley', 'binomial', 'full', 'empty').
+    random_state : RandomState, optional
+        Random state generator for reproducibility.
 
+    Returns
+    -------
+    np.array
+        Array of generated masks.
     """
     random_state = random_state or np.random
 
@@ -313,6 +425,39 @@ def generate_mask(
 
 
 class MaskDataset(torch.utils.data.Dataset):
+    """
+    A PyTorch dataset wrapper that supports generating masks and caching outputs
+    for use.
+
+    Attributes
+    ----------
+    dataset : Dataset
+        The underlying dataset.
+    num_features : int, optional
+        Number of features to generate masks for.
+    num_mask_samples : int, optional
+        Number of masks to generate per sample.
+    paired_mask_samples : bool, optional
+        Whether to generate complementary mask pairs.
+    mode : str, optional
+        Mask generation mode ('uniform', 'shapley', etc.).
+    random_seed : int, optional
+        Seed for reproducibility.
+
+    Methods
+    -------
+    __getitem__(idx)
+        Returns an item from the dataset with masks and optional cached values.
+    set_params(**kwargs)
+        Set parameters for mask generation.
+    set_cache(**kwargs)
+        Enable caching with provided masks and outputs.
+    reset_cache_counter()
+        Reset the cache access counter.
+    __len__()
+        Return the size of the dataset.
+    """
+
     def __init__(
         self,
         dataset,
@@ -322,6 +467,24 @@ class MaskDataset(torch.utils.data.Dataset):
         mode=None,
         random_seed=None,
     ):
+        """
+        Initialize the MaskDataset.
+
+        Parameters
+        ----------
+        dataset : Dataset
+            The underlying dataset to wrap.
+        num_features : int, optional
+            Number of features to use for mask generation.
+        num_mask_samples : int, optional
+            Number of masks to generate per sample.
+        paired_mask_samples : bool, optional
+            Whether to generate pairs of complementary masks.
+        mode : str, optional
+            The mode for mask generation ('uniform', 'shapley', etc.).
+        random_seed : int, optional
+            Seed for reproducibility.
+        """
         self.dataset = dataset
 
         self.use_cache = False
@@ -334,6 +497,19 @@ class MaskDataset(torch.utils.data.Dataset):
         self.random_seed = random_seed
 
     def __getitem__(self, idx):
+        """
+        Retrieve a sample from the dataset with masks and optional cached values.
+
+        Parameters
+        ----------
+        idx : int
+            Index of the sample to retrieve.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the sample with optional masks and model outputs.
+        """
         item = self.dataset[idx]
         if self.use_cache == True:
             if (
@@ -401,6 +577,14 @@ class MaskDataset(torch.utils.data.Dataset):
         mode=None,
         random_seed=None,
     ):
+        """
+        Set the parameters for mask generation.
+
+        Parameters
+        ----------
+        kwargs : dict
+            Parameters to set (num_features, num_mask_samples, etc.).
+        """
         self.use_cache = False
         self.num_features = num_features
         self.num_mask_samples = num_mask_samples
@@ -418,6 +602,26 @@ class MaskDataset(torch.utils.data.Dataset):
         cache_start_idx=0,
         cache_mask_size=1,
     ):
+        """
+        Enable caching with provided masks and outputs.
+
+        Parameters
+        ----------
+        masks : list, optional
+            Pre-generated masks.
+        model_outputs : list, optional
+            Cached model outputs.
+        grand_values : list, optional
+            Cached grand coalition values.
+        null_values : list, optional
+            Cached null coalition values.
+        shapley_values : list, optional
+            Cached Shapley values.
+        cache_start_idx : int, optional
+            Start index for cached access.
+        cache_mask_size : int, optional
+            Number of elements to retrieve from cache.
+        """
         self.use_cache = True
         self.cache_start_idx = cache_start_idx
         self.cache_mask_size = cache_mask_size
@@ -459,13 +663,30 @@ class MaskDataset(torch.utils.data.Dataset):
         self.reset_cache_counter()
 
     def reset_cache_counter(self):
+        """Reset the cache access counters."""
         self.cache_counter_list = [0 for _ in range(len(self.dataset))]
 
     def __len__(self):
+        """Return the length of the dataset."""
         return len(self.dataset)
 
 
 def get_checkpoint(training_args, logger):
+    """
+    Retrieve the latest checkpoint if available.
+
+    Parameters
+    ----------
+    training_args : TrainingArguments
+        Training configuration containing the output directory and other options.
+    logger : Logger
+        Logger to record messages.
+
+    Returns
+    -------
+    str or None
+        Path to the latest checkpoint or None if no checkpoint is available.
+    """
     last_checkpoint = None
     if (
         os.path.isdir(training_args.output_dir)
@@ -494,6 +715,21 @@ def get_checkpoint(training_args, logger):
 
 
 def load_shapley(path, target_subset_size=None):
+    """
+    Load Shapley values from saved files.
+
+    Parameters
+    ----------
+    path : str
+        Path to the directory containing Shapley outputs.
+    target_subset_size : int, optional
+        Subset size to filter specific outputs.
+
+    Returns
+    -------
+    dict
+        Dictionary of Shapley values indexed by sample ID.
+    """
     file_list = glob.glob(str(Path(path) / "[0-9]*"))
     output_dict = {}
     if target_subset_size is None:
@@ -521,6 +757,25 @@ def load_shapley(path, target_subset_size=None):
 def load_attribution(
     path, attribution_name="shapley", target_subset_size=None, sample_select=None
 ):
+    """
+    Load attribution values from saved files.
+
+    Parameters
+    ----------
+    path : str
+        Directory containing attribution outputs.
+    attribution_name : str, optional
+        Name of the attribution method (default: "shapley").
+    target_subset_size : int, optional
+        Subset size to filter outputs.
+    sample_select : list, optional
+        List of specific sample IDs to load.
+
+    Returns
+    -------
+    dict
+        Dictionary of attribution values indexed by sample ID.
+    """
     file_list = glob.glob(str(Path(path) / "[0-9]*"))
     if sample_select is not None:
         file_list = [

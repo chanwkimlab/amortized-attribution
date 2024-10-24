@@ -11,8 +11,9 @@
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
+# Modifications Copyright 2023 Chanwoo Kim
 
+import copy
 import logging
 import os
 import sys
@@ -200,7 +201,6 @@ def main():
     ########################################################
     # Initalize the classifier trainer
     ########################################################
-    import copy
 
     dataset_classifier = copy.deepcopy(dataset)
     # Load the accuracy metric from the datasets package
@@ -224,9 +224,9 @@ def main():
         model=classifier,
         args=training_args,
         train_dataset=dataset_classifier["train"] if training_args.do_train else None,
-        eval_dataset=dataset_classifier["validation"]
-        if training_args.do_train
-        else None,
+        eval_dataset=(
+            dataset_classifier["validation"] if training_args.do_train else None
+        ),
         compute_metrics=compute_metrics,
         tokenizer=classifier_image_processor,
         data_collator=collate_fn,
