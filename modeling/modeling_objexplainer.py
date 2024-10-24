@@ -2,27 +2,27 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import ipdb
 import torch
 from torch import nn
-from torch.nn import KLDivLoss
 from torch.nn import functional as F
-from transformers import (
-    AutoModelForImageClassification,
-    AutoModelForSemanticSegmentation,
-    PretrainedConfig,
-    PreTrainedModel,
-)
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import ImageClassifierOutput, SemanticSegmenterOutput
+from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.models.vit.modeling_vit import ViTLayer
-from transformers.utils import ModelOutput
 
 from modeling.modeling_surrogate import SurrogateForImageClassification
 
 
 class ObjExplainerForImageClassificationConfig(PretrainedConfig):
+    """
+    Configuration class for both the surrogate and explainer models.
+
+    Attributes:
+        surrogate_*: Configuration options for the surrogate model.
+        explainer_*: Configuration options for the explainer model.
+    """
+
     def __init__(
         self,
         surrogate_pretrained_model_name_or_path=None,
@@ -41,11 +41,16 @@ class ObjExplainerForImageClassificationConfig(PretrainedConfig):
         explainer_ignore_mismatched_sizes=None,
         **kwargs,
     ):
+        """
+        Initialize configuration for the surrogate and explainer models.
+        """
+        # Validate inputs.
         assert surrogate_pretrained_model_name_or_path is None or isinstance(
             surrogate_pretrained_model_name_or_path, str
         )
         assert isinstance(explainer_pretrained_model_name_or_path, str)
 
+        # Set surrogate model configurations.
         self.surrogate_pretrained_model_name_or_path = (
             surrogate_pretrained_model_name_or_path
         )
@@ -56,6 +61,7 @@ class ObjExplainerForImageClassificationConfig(PretrainedConfig):
         self.surrogate_token = surrogate_token
         self.surrogate_ignore_mismatched_sizes = surrogate_ignore_mismatched_sizes
 
+        # Set explainer model configurations.
         self.explainer_pretrained_model_name_or_path = (
             explainer_pretrained_model_name_or_path
         )
@@ -70,6 +76,15 @@ class ObjExplainerForImageClassificationConfig(PretrainedConfig):
 
 
 class ObjExplainerForImageClassification(PreTrainedModel):
+    """
+    Explainer model that uses a surrogate and explainer model to predict
+    feature contributions for image classification.
+
+    Attributes:
+        surrogate: A pretrained surrogate model for feature attribution.
+        explainer: A pretrained explainer model for extracting feature contributions.
+    """
+
     config_class = ObjExplainerForImageClassificationConfig
     main_input_name = "pixel_values"
 
@@ -77,10 +92,12 @@ class ObjExplainerForImageClassification(PreTrainedModel):
         self,
         config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
     ):
+        """
+        Initialize the explainer model with surrogate and explainer components.
+        """
         super().__init__(config)
-        # import ipdb
 
-        # ipdb.set_trace()
+        # Load the surrogate model if specified in the configuration.
         if config.surrogate_pretrained_model_name_or_path is not None:
             self.surrogate = SurrogateForImageClassification.from_pretrained(
                 pretrained_model_name_or_path=config.surrogate_pretrained_model_name_or_path,
@@ -90,14 +107,15 @@ class ObjExplainerForImageClassification(PreTrainedModel):
                 token=config.surrogate_token,
                 ignore_mismatched_sizes=config.surrogate_ignore_mismatched_sizes,
             )
-            self.surrogate.classifier = None
+            self.surrogate.classifier = None  # Disable classifier component.
 
-            # freeze surrogate
+            # Freeze surrogate parameters to prevent updates during training.
             for param in self.surrogate.parameters():
                 param.requires_grad = False
         else:
             self.surrogate = None
 
+        # Load the explainer model.
         self.explainer = SurrogateForImageClassification.from_pretrained(
             pretrained_model_name_or_path=config.explainer_pretrained_model_name_or_path,
             from_tf=config.explainer_from_tf,
@@ -106,6 +124,8 @@ class ObjExplainerForImageClassification(PreTrainedModel):
             token=config.explainer_token,
             ignore_mismatched_sizes=config.explainer_ignore_mismatched_sizes,
         )
+
+        # Initialize attention and MLP layers.
         self.attention_blocks = nn.ModuleList(
             [ViTLayer(config=self.explainer.surrogate.config)]
         )
@@ -139,11 +159,21 @@ class ObjExplainerForImageClassification(PreTrainedModel):
 
         self.link = nn.Softmax(dim=2)
 
+        # Ensure label consistency between the surrogate and explainer.
         assert (
             self.explainer.surrogate.num_labels == self.surrogate.surrogate.num_labels
         )
 
     def grand(self, pixel_values):
+        """
+        Compute predictions for the grand coalition (all features active).
+
+        Args:
+            pixel_values (torch.Tensor): Input images.
+
+        Returns:
+            torch.Tensor: Predictions for the grand coalition.
+        """
         self.surrogate.eval()
         with torch.no_grad():
             grand = (
@@ -164,6 +194,15 @@ class ObjExplainerForImageClassification(PreTrainedModel):
         return grand
 
     def null(self, pixel_values):
+        """
+        Compute predictions for the null coalition (no features active).
+
+        Args:
+            pixel_values (torch.Tensor): Input images.
+
+        Returns:
+            torch.Tensor: Predictions for the null coalition.
+        """
         if hasattr(self, "surrogate_null"):
             return self.surrogate_null
         else:
@@ -194,6 +233,21 @@ class ObjExplainerForImageClassification(PreTrainedModel):
         return_loss=True,
         **kwargs,
     ):
+        """
+        Forward pass through the explainer model.
+
+        Args:
+            pixel_values (torch.Tensor): Input images.
+            masks (Optional[torch.Tensor]): Mask tensor.
+            model_outputs (Optional[torch.Tensor]): Model outputs for comparison.
+            grand_values (Optional[torch.Tensor]): Grand coalition values.
+            null_values (Optional[torch.Tensor]): Null coalition values.
+            labels (Optional[torch.Tensor]): Ground truth labels.
+            return_loss (bool): Whether to compute and return the loss.
+
+        Returns:
+            SemanticSegmenterOutput: Model output with predictions and loss.
+        """
         output = self.explainer.surrogate(
             pixel_values=pixel_values, output_hidden_states=True
         )

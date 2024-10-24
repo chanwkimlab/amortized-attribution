@@ -2,22 +2,15 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import ipdb
 import torch
 from torch import nn
 from torch.nn import KLDivLoss
 from torch.nn import functional as F
-from transformers import (
-    AutoModelForImageClassification,
-    AutoModelForSemanticSegmentation,
-    PretrainedConfig,
-    PreTrainedModel,
-)
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import ImageClassifierOutput, SemanticSegmenterOutput
+from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.models.vit.modeling_vit import ViTLayer
-from transformers.utils import ModelOutput
 
 from modeling.modeling_surrogate import SurrogateForImageClassification
 

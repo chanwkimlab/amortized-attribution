@@ -1,28 +1,27 @@
 import os
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import ipdb
 import torch
 from torch import nn
-from torch.nn import KLDivLoss
 from torch.nn import functional as F
-from transformers import (
-    AutoModelForImageClassification,
-    AutoModelForSemanticSegmentation,
-    PretrainedConfig,
-    PreTrainedModel,
-)
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import ImageClassifierOutput, SemanticSegmenterOutput
+from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.models.vit.modeling_vit import ViTLayer
-from transformers.utils import ModelOutput
 
 from modeling.modeling_surrogate import SurrogateForImageClassification
 
 
 class RegExplainerForImageClassificationConfig(PretrainedConfig):
+    """
+    Configuration class for the explainer and surrogate models.
+
+    Attributes:
+        surrogate_* (str, Optional): Configurations for the surrogate model.
+        explainer_* (str, Optional): Configurations for the explainer model.
+    """
+
     def __init__(
         self,
         surrogate_pretrained_model_name_or_path=None,
@@ -41,6 +40,9 @@ class RegExplainerForImageClassificationConfig(PretrainedConfig):
         explainer_ignore_mismatched_sizes=None,
         **kwargs,
     ):
+        """
+        Initialize configurations for both surrogate and explainer models.
+        """
         assert surrogate_pretrained_model_name_or_path is None or isinstance(
             surrogate_pretrained_model_name_or_path, str
         )
@@ -70,6 +72,14 @@ class RegExplainerForImageClassificationConfig(PretrainedConfig):
 
 
 class RegExplainerForImageClassification(PreTrainedModel):
+    """
+    Custom explainer model that uses both a surrogate and explainer model.
+
+    Attributes:
+        surrogate (SurrogateForImageClassification): The surrogate model.
+        explainer (SurrogateForImageClassification): The explainer model.
+    """
+
     config_class = RegExplainerForImageClassificationConfig
     main_input_name = "pixel_values"
 
@@ -77,10 +87,12 @@ class RegExplainerForImageClassification(PreTrainedModel):
         self,
         config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
     ):
+        """
+        Initialize the explainer model with surrogate and explainer components.
+        """
         super().__init__(config)
-        # import ipdb
 
-        # ipdb.set_trace()
+        # Load surrogate model if provided.
         if config.surrogate_pretrained_model_name_or_path is not None:
             self.surrogate = SurrogateForImageClassification.from_pretrained(
                 pretrained_model_name_or_path=config.surrogate_pretrained_model_name_or_path,
@@ -92,12 +104,13 @@ class RegExplainerForImageClassification(PreTrainedModel):
             )
             self.surrogate.classifier = None
 
-            # freeze surrogate
+            # Freeze surrogate parameters to avoid updating them during training.
             for param in self.surrogate.parameters():
                 param.requires_grad = False
         else:
             self.surrogate = None
 
+        # Load explainer model.
         self.explainer = SurrogateForImageClassification.from_pretrained(
             pretrained_model_name_or_path=config.explainer_pretrained_model_name_or_path,
             from_tf=config.explainer_from_tf,
@@ -106,6 +119,8 @@ class RegExplainerForImageClassification(PreTrainedModel):
             token=config.explainer_token,
             ignore_mismatched_sizes=config.explainer_ignore_mismatched_sizes,
         )
+
+        # Initialize attention and MLP layers.
         self.attention_blocks = nn.ModuleList(
             [ViTLayer(config=self.explainer.surrogate.config)]
         )
@@ -132,6 +147,7 @@ class RegExplainerForImageClassification(PreTrainedModel):
             ]
         )
 
+        # Normalization and output link functions.
         self.normalization = (
             lambda pred, grand, null: pred
             + ((grand - null) - torch.sum(pred, dim=1)).unsqueeze(1) / pred.shape[1]
@@ -139,11 +155,21 @@ class RegExplainerForImageClassification(PreTrainedModel):
 
         self.link = nn.Softmax(dim=2)
 
+        # Ensure label consistency between models.
         assert (
             self.explainer.surrogate.num_labels == self.surrogate.surrogate.num_labels
         )
 
     def grand(self, pixel_values):
+        """
+        Compute predictions for the grand coalition (all features included).
+
+        Args:
+            pixel_values (torch.Tensor): Input image tensor.
+
+        Returns:
+            torch.Tensor: Predictions for the grand coalition.
+        """
         self.surrogate.eval()
         with torch.no_grad():
             grand = self.link(
@@ -164,6 +190,15 @@ class RegExplainerForImageClassification(PreTrainedModel):
         return grand
 
     def null(self, pixel_values):
+        """
+        Compute predictions for the null coalition (no features included).
+
+        Args:
+            pixel_values (torch.Tensor): Input image tensor.
+
+        Returns:
+            torch.Tensor: Predictions for the null coalition.
+        """
         if hasattr(self, "surrogate_null"):
             return self.surrogate_null
         else:
@@ -186,6 +221,18 @@ class RegExplainerForImageClassification(PreTrainedModel):
     def forward(
         self, pixel_values, shapley_values=None, labels=None, return_loss=True, **kwargs
     ):
+        """
+        Forward pass through the explainer model.
+
+        Args:
+            pixel_values (torch.Tensor): Input images.
+            shapley_values (Optional[torch.Tensor]): Target Shapley values for loss computation.
+            labels (Optional[torch.Tensor]): Ground truth labels.
+            return_loss (bool): Whether to compute and return the loss.
+
+        Returns:
+            SemanticSegmenterOutput: Model output containing predictions and loss (if applicable).
+        """
         output = self.explainer.surrogate(
             pixel_values=pixel_values, output_hidden_states=True
         )

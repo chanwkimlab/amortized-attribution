@@ -2,21 +2,16 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import ipdb
 import torch
-from torch import nn
 from torch.nn import KLDivLoss
 from torch.nn import functional as F
 from transformers import (
     AutoModelForImageClassification,
-    AutoModelForSemanticSegmentation,
     PretrainedConfig,
     PreTrainedModel,
 )
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import ImageClassifierOutput, SemanticSegmenterOutput
-from transformers.models.vit.modeling_vit import ViTLayer
 from transformers.utils import ModelOutput
 
 
@@ -50,6 +45,14 @@ class ImageSurrogateOutput(ModelOutput):
 
 
 class SurrogateForImageClassificationConfig(PretrainedConfig):
+    """
+    Configuration class for the surrogate and original classifier models.
+
+    Attributes:
+        Includes various paths, tokens, and flags for loading pretrained models,
+        both for the original classifier and the surrogate model.
+    """
+
     def __init__(
         self,
         classifier_pretrained_model_name_or_path=None,
@@ -68,11 +71,16 @@ class SurrogateForImageClassificationConfig(PretrainedConfig):
         surrogate_ignore_mismatched_sizes=None,
         **kwargs,
     ):
+        """
+        Initialize configuration for both surrogate and classifier models.
+        """
+        # Ensure valid input types.
         assert classifier_pretrained_model_name_or_path is None or isinstance(
             classifier_pretrained_model_name_or_path, str
         )
         assert isinstance(surrogate_pretrained_model_name_or_path, str)
 
+        # Set classifier configuration.
         self.classifier_pretrained_model_name_or_path = (
             classifier_pretrained_model_name_or_path
         )
@@ -83,6 +91,7 @@ class SurrogateForImageClassificationConfig(PretrainedConfig):
         self.classifier_token = classifier_token
         self.classifier_ignore_mismatched_sizes = classifier_ignore_mismatched_sizes
 
+        # Set surrogate configuration.
         self.surrogate_pretrained_model_name_or_path = (
             surrogate_pretrained_model_name_or_path
         )
@@ -98,12 +107,23 @@ class SurrogateForImageClassificationConfig(PretrainedConfig):
 
 # https://huggingface.co/docs/transformers/custom_models
 class SurrogateForImageClassification(PreTrainedModel):
+    """
+    Custom surrogate model that integrates with a pretrained classifier.
+
+    Attributes:
+        surrogate (PreTrainedModel): The surrogate model used for inference.
+        classifier (Optional[PreTrainedModel]): The classifier model, used for loss computation.
+    """
+
     config_class = SurrogateForImageClassificationConfig
 
     def __init__(
         self,
         config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
     ):
+        """
+        Initialize the surrogate model and optionally a classifier model.
+        """
         super().__init__(config)
 
         self.surrogate = AutoModelForImageClassification.from_pretrained(
@@ -116,6 +136,7 @@ class SurrogateForImageClassification(PreTrainedModel):
             ignore_mismatched_sizes=config.surrogate_ignore_mismatched_sizes,
         )
 
+        # Optionally load a classifier model.
         if config.classifier_pretrained_model_name_or_path is not None:
             self.classifier = AutoModelForImageClassification.from_pretrained(
                 pretrained_model_name_or_path=config.classifier_pretrained_model_name_or_path,
@@ -136,21 +157,35 @@ class SurrogateForImageClassification(PreTrainedModel):
             self.classifier = None
 
     def forward(self, pixel_values, masks, labels=None, return_loss=True, **kwargs):
-        # infer patch size
+        """
+        Perform a forward pass through the surrogate model.
+
+        Args:
+            pixel_values (torch.Tensor): Input images with shape (batch_size, channels, width, height).
+            masks (torch.Tensor): Mask tensor with shape (batch_size, num_samples, num_patches).
+            labels (Optional[torch.Tensor]): Ground truth labels, if available.
+            return_loss (bool): Whether to compute and return the loss.
+
+        Returns:
+            ImageSurrogateOutput: Output containing loss, logits, and masks.
+        """
+
+        # Validate input shapes.
         assert (
             len(pixel_values.shape) == 4
         ), f"The pixel values must be a 4D tensor of shape (num_batches, channels, width, height) but got {pixel_values.shape}"
         assert (
             len(masks.shape) == 3
         ), f"The masks must be a 3D tensor of shape (num_batches, num_mask_samples, num_patches) but got {masks.shape}"
+        # # infer patch size
         patch_size = (
             pixel_values.shape[2] * pixel_values.shape[3] / masks.shape[2]
         ) ** (0.5)
         num_mask_samples = masks.shape[1]
-        assert patch_size.is_integer(), "The patch size is not an integer"
+        assert patch_size.is_integer(), "Patch size is not an integer"
         patch_size = int(patch_size)
 
-        # resize masks
+        # Reshape masks for broadcasting with pixel values.
         masks_resize = masks.reshape(
             -1, masks.shape[2]
         )  # (num_batches, num_mask_samples, num_patches) -> (num_batches * num_mask_samples, num_patches)
@@ -165,6 +200,7 @@ class SurrogateForImageClassification(PreTrainedModel):
             patch_size, dim=2
         )  # (num_batches * num_mask_samples, num_patches_width, num_patches_height) -> (num_batches * num_mask_samples, width, height)
 
+        # Perform inference with the surrogate model.
         surrogate_output = self.surrogate(
             pixel_values=pixel_values.repeat_interleave(num_mask_samples, dim=0)
             * (
@@ -179,13 +215,14 @@ class SurrogateForImageClassification(PreTrainedModel):
             with torch.no_grad():
                 classifier_output = self.classifier(pixel_values=pixel_values)
 
+            # Compute the loss based on the problem type.
             if self.surrogate.config.problem_type == "regression":
                 raise NotImplementedError
-                loss_fct = MSELoss()
-                if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), classifier_logits.squeeze())
-                else:
-                    loss = loss_fct(logits, classifier_logits)
+                # loss_fct = MSELoss()
+                # if self.num_labels == 1:
+                #     loss = loss_fct(logits.squeeze(), classifier_logits.squeeze())
+                # else:
+                #     loss = loss_fct(logits, classifier_logits)
             elif self.surrogate.config.problem_type == "single_label_classification":
                 loss_fct = KLDivLoss(reduction="batchmean", log_target=False)
                 loss = loss_fct(
