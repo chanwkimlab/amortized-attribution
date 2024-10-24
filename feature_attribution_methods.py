@@ -1,10 +1,20 @@
+import operator as op
+from collections import OrderedDict
+from functools import reduce
+
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from tqdm.auto import tqdm
 
 
 class AttributionValues:
-    """For storing and plotting Shapley values."""
+    """
+    A class to store attribution values.
+
+    Attributes:
+        values (np.ndarray): attribution values calculated for the model.
+        std (np.ndarray): Standard deviation associated with the attribution values.
+    """
 
     def __init__(self, values, std):
         self.values = values
@@ -23,11 +33,26 @@ def ShapleySampling(
     antithetical=False,
     return_all=False,
 ):
-    # Calculate null coalition value.
+    """
+    Compute Shapley values using permutation sampling.
 
+    Args:
+        surrogate (callable): Model to evaluate with different feature subsets.
+        num_players (int): Number of features/players in the game.
+        total_samples (int): Number of permutation samples.
+        detect_convergence (bool): Whether to detect convergence.
+        thresh (float): Convergence threshold.
+        antithetical (bool): Use antithetical sampling
+        return_all (bool): Whether to return tracking information.
+
+    Returns:
+        AttributionValues: Estimated Shapley values with standard deviation.
+        dict (optional): Tracking information, if `return_all` is True.
+    """
+    # Initialize with the value for the null coalition.
     null = surrogate([np.zeros((1, num_players), dtype=int)])[0][0]
-    # each loop generate batch_size * num_players samples
-    # Setup.
+
+    # Setup data structures to store results. (each loop generate batch_size * num_players samples)
     if isinstance(null, np.ndarray):
         values = np.zeros((num_players, len(null)))
         sum_squares = np.zeros((num_players, len(null)))
@@ -36,30 +61,25 @@ def ShapleySampling(
         values = np.zeros((num_players))
         sum_squares = np.zeros((num_players))
         deltas = np.zeros((total_samples, num_players))
+
+    # Generate random permutations for sampling.
     permutations = np.tile(np.arange(num_players), (total_samples, 1))
     arange = np.arange(total_samples)
-    n = 0
 
-    # For tracking progress.
+    # Track progress if needed.
     if return_all:
         N_list = []
         std_list = []
         val_list = []
 
+    # Generate all permutations for sampling.
     for i in range(total_samples):
         if antithetical and i % 2 == 1:
             permutations[i] = permutations[i - 1][::-1]
         else:
             np.random.shuffle(permutations[i])
 
-    # S = np.zeros((total_samples, num_players), dtype=int)
-    # S_list = []
-    # for i in range(num_players):
-    #     S[arange, permutations[:, i]] = 1
-    #     S_list += [np.expand_dims(S_, axis=0) for S_ in S]
-    # surrogate_output = surrogate(S_list)[:, 0, :]
-    # surrogate_output = surrogate_output.reshape(num_players, total_samples, -1)
-
+    # Generate binary masks representing feature subsets.
     S = np.zeros((total_samples, num_players), dtype=int)
     S_list = []
     for i in range(num_players):
@@ -67,21 +87,22 @@ def ShapleySampling(
         S_list += [np.expand_dims(S_.copy(), axis=0) for S_ in S]
 
     S_list = np.array(S_list)[:, 0, :]
-    # S_list = [S_list[4 * j : 4 * (j + 1)] for j in range(int(np.ceil(len(S_list) / 4)))]
     S_list = [S_list[4 * j : 4 * (j + 1)] for j in range(int(np.ceil(len(S_list) / 4)))]
     surrogate_output = surrogate(S_list)
 
-    # surrogate_output = surrogate(S_list)
     surrogate_output = surrogate_output.reshape(
         num_players, total_samples, surrogate_output.shape[-1]
     )
 
+    # Compute incremental contributions of features.
     prev_value = null
     for i in range(num_players):
         next_value = surrogate_output[i, :, :]
         deltas[arange, permutations[:, i]] = next_value - prev_value
         prev_value = next_value
 
+    # Use Welford's algorithm to calculate running mean and variance.
+    n = 0
     for batch_idx in range(total_samples):
         # Welford's algorithm.
         n += 1
@@ -116,15 +137,16 @@ def ShapleySampling(
         return AttributionValues(values, std), ratio
 
 
-import operator as op
-from collections import OrderedDict
-from functools import reduce
-
-
 def ncr(n, r):
     """
-    Combinatorial computation: number of subsets of size r among n elements
-    Efficient algorithm
+    Compute the number of combinations (n choose r).
+
+    Args:
+        n (int): Total number of elements.
+        r (int): Number of elements to choose.
+
+    Returns:
+        int: The number of ways to choose r elements from a set of n.
     """
     r = min(r, n - r)
     numer = reduce(op.mul, range(n, n - r, -1), 1)
@@ -133,12 +155,21 @@ def ncr(n, r):
 
 
 def projection_step(phi, total):
+    """
+    Perform a projection step to adjust Shapley values.
+
+    Args:
+        phi (np.ndarray): Current estimate of Shapley values.
+        total (np.ndarray): Total contribution of all players.
+
+    Returns:
+        np.ndarray: Adjusted Shapley values.
+    """
     return phi - (np.sum(phi, axis=0) - total) / len(phi)
 
 
 def ShapleySGD(
     surrogate,
-    # game,
     d,
     num_subsets=100,
     mbsize=32,
@@ -151,7 +182,23 @@ def ShapleySGD(
     phi_0=False,
 ):
     """
-    Estimate the Shapley values using projected stochastic gradient descent.
+    Estimate Shapley values using stochastic gradient descent (SGD).
+
+    Args:
+        surrogate (callable): Model to evaluate with different feature subsets.
+        d (int): Number of players/features.
+        num_subsets (int): Number of subsets to sample.
+        mbsize (int): Mini-batch size for SGD.
+        step (float): Step size for gradient updates.
+        step_type (str): Type of step size schedule ('constant', 'sqrt', 'inverse').
+        sampling (str): Sampling strategy ('importance', 'default', 'paired').
+        averaging (str): Averaging method ('none', 'uniform', 'tail').
+        return_interval (int): Interval for returning progress tracking.
+        C (float): Constant for importance sampling.
+        phi_0 (np.ndarray, optional): Initial value of Shapley estimates.
+
+    Returns:
+        dict: Tracking information for the optimization.
     """
     # Get general information
     assert sampling in ("default", "paired", "importance")
@@ -344,6 +391,28 @@ def ShapleyRegression(
     variance_batches=None,
     verbose=False,
 ):
+    """
+    Perform Shapley regression for approximating feature attributions.
+
+    Parameters:
+    - surrogate: Function that takes a list of masks and returns model outputs.
+    - num_players: Number of features/players in the game.
+    - num_subsets: Number of subsets to sample.
+    - batch_size: Size of each batch for processing (default: 512).
+    - detect_convergence: Whether to detect convergence based on threshold (default: True).
+    - thresh: Threshold for convergence detection (default: 0.01).
+    - paired_sampling: Whether to use paired sampling for subsets (default: True).
+    - return_all: Whether to return all intermediate results (default: False).
+    - min_variance_samples: Minimum number of samples for variance estimation.
+    - variance_batches: Number of batches to use for variance estimation.
+    - verbose: Whether to print progress messages (default: False).
+
+    Returns:
+    - AttributionValues: A tuple containing the Shapley values and their standard deviations.
+    - tracking_dict (optional): A dictionary containing intermediate values, standard deviations,
+      and iteration counts, if return_all is True.
+    - ratio: The convergence ratio.
+    """
     if min_variance_samples is None:
         min_variance_samples = default_min_variance_samples()
     else:
@@ -487,6 +556,21 @@ def BanzhafSampling(
     antithetical=False,
     return_all=False,
 ):
+    """
+    Estimate Banzhaf values using maximum sample reuse trick
+
+    Args:
+        surrogate (callable): Model or function to evaluate different feature subsets.
+        num_players (int): Number of players or features.
+        num_subsets (int): Number of subsets to sample.
+        return_interval (int): Interval for tracking progress.
+        antithetical (bool): Use antithetical sampling to reduce variance.
+        return_all (bool): Whether to return tracking information.
+
+    Returns:
+        AttributionValues: Estimated Banzhaf values.
+        dict: Tracking information.
+    """
     if antithetical:
         masks = (np.random.rand(num_subsets // 2, num_players) > 0.5).astype("int")
         masks = [j for mask in masks for j in [mask, 1 - mask]]
@@ -636,51 +720,6 @@ def BanzhafSampling(
 
     return AttributionValues(values, 0), tracking_dict
 
-    # surrogate_output = surrogate(S_list)
-
-    # # surrogate_output = surrogate(S_list)
-    # surrogate_output = surrogate_output.reshape(num_subsets, surrogate_output.shape[-1])
-
-    # for num_subsets_select in tqdm(
-    #     range(return_interval, num_subsets + 1, return_interval)
-    # ):
-    #     values = []
-    #     for i in range(num_players):
-    #         surrogate_output_included = surrogate_output[:num_subsets_select, :][
-    #             masks[:num_subsets_select, i] == 1
-    #         ]
-
-    #         surrogate_output_included_mean = (
-    #             np.mean(surrogate_output_included, axis=0)
-    #             if len(surrogate_output_included) > 0
-    #             else np.zeros(surrogate_output.shape[-1])
-    #         )
-
-    #         surrogate_output_not_included = surrogate_output[:num_subsets_select, :][
-    #             masks[:num_subsets_select, i] == 0
-    #         ]
-    #         surrogate_output_not_included_mean = (
-    #             np.mean(surrogate_output_not_included, axis=0)
-    #             if len(surrogate_output_not_included) > 0
-    #             else np.zeros(surrogate_output.shape[-1])
-    #         )
-    #         values.append(
-    #             surrogate_output_included_mean - surrogate_output_not_included_mean
-    #         )
-    #     values = np.array(values)
-
-    #     if return_all:
-    #         val_list.append(np.copy(values))
-    #         iters_list.append(num_subsets_select)
-
-    # if return_all:
-    #     # Dictionary for progress tracking.
-    #     tracking_dict = {"values": val_list, "iters": iters_list}
-
-    #     return AttributionValues(values, 0), tracking_dict
-    # else:
-    #     return AttributionValues(values, 0)
-
 
 def calculate_result_lime(A, b, total):
     """Calculate the regression coefficients."""
@@ -710,6 +749,31 @@ def LIMERegression(
     antithetical=False,
     return_all=False,
 ):
+    """
+    Compute the LIME regression coefficients.
+
+    Parameters
+    ----------
+    surrogate : callable
+        The surrogate model to use.
+    num_players : int
+        The number of players.
+    num_subsets : int, optional
+        The number of subsets to sample, by default 512.
+    return_interval : int, optional
+        The interval at which to return the attribution values, by default 500.
+    antithetical : bool, optional
+        Whether to use antithetical sampling, by default False.
+    return_all : bool, optional
+        Whether to return all the attribution values, by default False.
+
+    Returns
+    -------
+    AttributionValues
+        The attribution values.
+    dict
+        A dictionary containing the attribution values and the iteration numbers.
+    """
     if antithetical:
         masks = (np.random.rand(num_subsets // 2, num_players) > 0.5).astype("int")
         masks = [j for mask in masks for j in [mask, 1 - mask]]
@@ -765,18 +829,6 @@ def LIMERegression(
         )
         attribution, intercept = beta[1:], beta[0]
         values.append(attribution)
-
-        # x = (
-        #     LinearRegression()
-        #     .fit(
-        #         masks[:interval],
-        #         surrogate_output[:interval],
-        #         sample_weight=weights[:interval],
-        #     )
-        #     .coef_
-        # )
-
-        # print(interval, np.isclose(values, x.T), values - x.T)
 
     tracking_dict = {"values": values, "iters": interval_array.tolist()}
 
